@@ -22,6 +22,37 @@ points below.
 - **`ChainedHook<A, B>`** — compose two `PromptHook`s on a single agent (e.g.
   pair `MemvidPersistHook` with `TelemetryHook`).
 
+## Architecture
+
+`rig-observe` acts as a tap, listening to various hooks in the Rig lifecycle and writing uniform JSON payloads into the `tracing` ecosystem under a dedicated `rig_observe` target.
+
+```text
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│   Host Agent    │──────►│  TelemetryHook  ├──────►│                 │
+│ (rig::pipeline) │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       │                 │
+                                                    │                 │
+┌─────────────────┐       ┌─────────────────┐       │ tracing::info!  │
+│                 │       │                 │       │  (target:       │
+│  Host Runtime   │──────►│DispatchObserve..├──────►│  "rig_observe") │
+│  (rig_compose)  │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       │                 │
+                                                    │                 │
+┌─────────────────┐       ┌─────────────────┐       │                 │
+│                 │       │                 │       │                 │
+│ ConversationMem ├──────►│ ObservedMemory  ├──────►│                 │
+│  (rig::memory)  │       │                 │       └────────┬────────┘
+└─────────────────┘       └─────────────────┘                │
+                                                             ▼
+                                                    ┌─────────────────┐
+                                                    │                 │
+                                                    │  Telemetry Sink │
+                                                    │ (OTEL/Langfuse/ │
+                                                    │  Phoenix/etc.)  │
+                                                    └─────────────────┘
+```
+
 ## Wire format
 
 All events are flat JSON serialized via `tracing::info!(target: "rig_observe", event = %json)`:
