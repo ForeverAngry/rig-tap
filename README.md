@@ -22,6 +22,37 @@ points below.
 - **`ChainedHook<A, B>`** — compose two `PromptHook`s on a single agent (e.g.
   pair `MemvidPersistHook` with `TelemetryHook`).
 
+## Quick start
+
+Wire a `tracing` subscriber that keeps the dedicated `rig_observe` target, then
+attach the hooks at the lifecycle boundary you want to observe:
+
+```rust,no_run
+use rig_observe::{ObservedMemory, TelemetryHook};
+use tracing_subscriber::{EnvFilter, prelude::*};
+
+fn install_observe_sink() {
+    tracing_subscriber::registry()
+        .with(EnvFilter::new("rig_observe=info"))
+        .with(tracing_subscriber::fmt::layer().json())
+        .init();
+}
+
+# fn build<M: rig::completion::CompletionModel>() -> TelemetryHook<M> {
+let hook = TelemetryHook::<M>::with_defaults("qwen3.5:9b", "thread-1");
+let memory = ObservedMemory::new(rig::memory::InMemoryConversationMemory::new());
+
+// Attach `hook` to a Rig agent and use `memory` anywhere a
+// `ConversationMemory` implementation is accepted.
+# let _ = memory;
+# hook }
+```
+
+For kernel-direct tool dispatch, enable the `compose` feature and register
+`DispatchObserveHook` with `dispatch_tool_invocations_with_hooks`. For
+deterministic tests or examples, enable `subscriber` and use `CapturingLayer` to
+collect typed `ObservabilityEvent` values in-process.
+
 ## Architecture
 
 `rig-observe` acts as a tap, listening to various hooks in the Rig lifecycle and writing uniform JSON payloads into the `tracing` ecosystem under a dedicated `rig_observe` target.
@@ -124,11 +155,11 @@ independently.
 
 ## Status
 
-This crate currently lives in the `rig-ecosystem` workspace as a path
-dependency (consumed by `rig-memvid` behind its `observe` feature) but does
-not have its own git history or `release-plz.toml` yet. A `crates.io`
-publish + release-plz wiring will land before downstream crates pin a
-versioned dep.
+Crate version: `0.1.0`. Rust edition: 2024. MSRV: 1.89. The library is
+runtime-agnostic and emits through `tracing`; production consumers should use a
+non-blocking tracing sink when exporting events off-host. The optional
+`subscriber` feature is for tests/examples, while the optional `compose`
+feature adds the `rig-compose` dispatch tap.
 
 ## License
 
