@@ -1,0 +1,109 @@
+//! Tracing transport for [`ObservabilityEvent`].
+//!
+//! All events are emitted as a single `tracing::info!` call under the
+//! `rig_observe` target with a single `event` field carrying the JSON-encoded
+//! envelope. Consumers attach a `tracing_subscriber::Layer` filtered to that
+//! target.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::error::Error;
+use crate::event::{EventKind, ObservabilityEvent, SCHEMA_VERSION};
+
+/// Target string used on every `rig_observe` event.
+pub const EVENT_TARGET: &str = "rig_observe";
+
+static TICK: AtomicU64 = AtomicU64::new(0);
+
+/// Return the next monotonic per-process tick.
+pub fn next_tick() -> u64 {
+    TICK.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Return the current wall-clock time in milliseconds since the Unix epoch.
+/// Returns `0` if the clock is set before the epoch.
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// Build a fully-formed [`ObservabilityEvent`] for `kind` belonging to
+/// `conversation_id`, stamped with the next tick and current wall time.
+pub fn build_event(conversation_id: impl Into<String>, kind: EventKind) -> ObservabilityEvent {
+    ObservabilityEvent {
+        version: SCHEMA_VERSION,
+        occurred_at_millis: now_millis(),
+        tick: next_tick(),
+        conversation_id: conversation_id.into(),
+        kind,
+    }
+}
+
+/// Emit `event` over the `rig_observe` tracing target as a single
+/// `info!`-level event carrying a JSON-encoded `event` field.
+///
+/// Returns an [`Error`] if the event fails to serialize. Callers in library
+/// code typically discard the result via [`emit`] which logs serialization
+/// failures rather than propagating them.
+pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
+    let json = serde_json::to_string(event)?;
+    tracing::info!(target: EVENT_TARGET, event = %json);
+    Ok(())
+}
+
+/// Emit `event` over the `rig_observe` tracing target. Serialization failures
+/// are logged at `warn` level under the same target and otherwise swallowed
+/// so that telemetry never panics the agent loop.
+pub fn emit(event: &ObservabilityEvent) {
+    if let Err(err) = try_emit(event) {
+        tracing::warn!(
+            target: EVENT_TARGET,
+            error = %err,
+            error_kind = err.kind(),
+            "rig-observe: failed to emit event",
+        );
+    }
+}
+
+/// Convenience: build + emit in one call.
+pub fn emit_kind(conversation_id: impl Into<String>, kind: EventKind) {
+    let event = build_event(conversation_id, kind);
+    emit(&event);
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::expect_used
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tick_is_monotonic() {
+        let a = next_tick();
+        let b = next_tick();
+        assert!(b > a);
+    }
+
+    #[test]
+    fn build_event_stamps_envelope() {
+        let evt = build_event(
+            "c",
+            EventKind::PromptStarted {
+                model: "m".into(),
+                messages_in: 0,
+            },
+        );
+        assert_eq!(evt.version, SCHEMA_VERSION);
+        assert_eq!(evt.conversation_id, "c");
+        // occurred_at_millis is 0 only if the system clock is broken; in tests
+        // it should always be a positive value.
+        assert!(evt.occurred_at_millis > 0);
+    }
+}

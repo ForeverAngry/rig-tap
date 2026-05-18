@@ -1,0 +1,60 @@
+[package]
+name = "rig-observe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "Backend-agnostic observability event schema and taps for Rig agents (prompt/tool lifecycle + context-size sampling)."
+repository = "https://github.com/ForeverAngry/rig-observe"
+authors = ["ForeverAngry"]
+keywords = ["rig", "observability", "telemetry", "ai", "agent"]
+categories = ["development-tools::debugging"]
+
+[dependencies]
+# Aliased as `rig` to match the existing `use rig::...` convention used by
+# every other crate in the ecosystem (rig-memvid, rig-compose, ...).
+rig = { package = "rig-core", version = "0.37.0", default-features = false }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3", default-features = false, optional = true }
+# Optional bridge to rig-compose's kernel-direct tool dispatch. Pulled
+# only by the `compose` feature so the default build stays free of any
+# rig-compose dependency.
+rig-compose = { version = "0.3", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[dev-dependencies]
+anyhow = "1.0.102"
+tokio = { version = "1.51.1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+rig-compose = "0.3"
+
+[features]
+default = []
+# Enables a public `tracing_subscriber::Layer` (`CapturingLayer`) that
+# parses and stores `rig_observe` events in memory. Useful for tests,
+# examples, and small in-process tools. Production deployments shipping
+# events off-host should wire a non-blocking sink instead.
+subscriber = ["dep:tracing-subscriber"]
+# Enables `DispatchObserveHook`, a `rig_compose::ToolDispatchHook` that
+# emits `tool.invoked`/`tool.completed`/`tool.skipped`/`tool.terminated`
+# events for the kernel-direct dispatch path (callers that don't use the
+# rig agent `PromptHook` surface).
+compose = ["dep:rig-compose", "dep:async-trait"]
+
+[lints.clippy]
+dbg_macro = "forbid"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+expect_used = "deny"
+expect_fun_call = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+todo = "forbid"
+unimplemented = "forbid"
+unreachable = "deny"
+unwrap_used = "deny"
