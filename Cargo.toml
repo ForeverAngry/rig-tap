@@ -1,12 +1,12 @@
 [package]
-name = "rig-observe"
+name = "rig-tap"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 description = "Backend-agnostic observability event schema and taps for Rig agents (prompt/tool lifecycle + context-size sampling)."
-repository = "https://github.com/ForeverAngry/rig-observe"
+repository = "https://github.com/ForeverAngry/rig-tap"
 authors = ["ForeverAngry"]
 keywords = ["rig", "observability", "telemetry", "ai", "agent"]
 categories = ["development-tools::debugging"]
@@ -35,7 +35,7 @@ rig-compose = "0.3"
 [features]
 default = []
 # Enables a public `tracing_subscriber::Layer` (`CapturingLayer`) that
-# parses and stores `rig_observe` events in memory. Useful for tests,
+# parses and stores `rig_tap` events in memory. Useful for tests,
 # examples, and small in-process tools. Production deployments shipping
 # events off-host should wire a non-blocking sink instead.
 subscriber = ["dep:tracing-subscriber"]

@@ -1,7 +1,7 @@
 //! Tracing transport for [`ObservabilityEvent`].
 //!
 //! All events are emitted as a single `tracing::info!` call under the
-//! `rig_observe` target with a single `event` field carrying the JSON-encoded
+//! `rig_tap` target with a single `event` field carrying the JSON-encoded
 //! envelope. Consumers attach a `tracing_subscriber::Layer` filtered to that
 //! target.
 
@@ -11,8 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::Error;
 use crate::event::{EventKind, ObservabilityEvent, SCHEMA_VERSION};
 
-/// Target string used on every `rig_observe` event.
-pub const EVENT_TARGET: &str = "rig_observe";
+/// Target string used on every `rig_tap` event.
+pub const EVENT_TARGET: &str = "rig_tap";
 
 static TICK: AtomicU64 = AtomicU64::new(0);
 
@@ -42,7 +42,7 @@ pub fn build_event(conversation_id: impl Into<String>, kind: EventKind) -> Obser
     }
 }
 
-/// Emit `event` over the `rig_observe` tracing target as a single
+/// Emit `event` over the `rig_tap` tracing target as a single
 /// `info!`-level event carrying a JSON-encoded `event` field.
 ///
 /// Returns an [`Error`] if the event fails to serialize. Callers in library
@@ -54,7 +54,7 @@ pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
     Ok(())
 }
 
-/// Emit `event` over the `rig_observe` tracing target. Serialization failures
+/// Emit `event` over the `rig_tap` tracing target. Serialization failures
 /// are logged at `warn` level under the same target and otherwise swallowed
 /// so that telemetry never panics the agent loop.
 pub fn emit(event: &ObservabilityEvent) {
@@ -63,7 +63,7 @@ pub fn emit(event: &ObservabilityEvent) {
             target: EVENT_TARGET,
             error = %err,
             error_kind = err.kind(),
-            "rig-observe: failed to emit event",
+            "rig-tap: failed to emit event",
         );
     }
 }

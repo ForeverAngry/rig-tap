@@ -20,7 +20,7 @@ use crate::event::EventKind;
 ///
 /// ```no_run
 /// use rig::memory::InMemoryConversationMemory;
-/// use rig_observe::ObservedMemory;
+/// use rig_tap::ObservedMemory;
 ///
 /// let inner = InMemoryConversationMemory::new();
 /// let observed = ObservedMemory::new(inner);

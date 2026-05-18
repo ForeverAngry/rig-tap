@@ -13,7 +13,7 @@
 //! # Wire format
 //!
 //! All events are emitted as a single `tracing::info!` event on the
-//! [`EVENT_TARGET`] target (`"rig_observe"`) with a single
+//! [`EVENT_TARGET`] target (`"rig_tap"`) with a single
 //! string field `event` carrying the JSON-encoded
 //! [`ObservabilityEvent`]. Consumers attach a `tracing_subscriber::Layer`
 //! filtered to that target.
@@ -33,7 +33,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use rig_observe::{TelemetryHook, ObservedMemory};
+//! use rig_tap::{TelemetryHook, ObservedMemory};
 //! use rig::memory::InMemoryConversationMemory;
 //!
 //! # fn build<M: rig::completion::CompletionModel>() -> TelemetryHook<M> {

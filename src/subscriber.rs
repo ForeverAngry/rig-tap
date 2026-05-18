@@ -1,4 +1,4 @@
-//! Optional `tracing_subscriber::Layer` that captures `rig_observe` events
+//! Optional `tracing_subscriber::Layer` that captures `rig_tap` events
 //! into an in-memory buffer.
 //!
 //! Off by default. Enable with `--features subscriber`. The layer is suitable
@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```
-//! use rig_observe::{CapturingLayer, EventKind, emit_kind};
+//! use rig_tap::{CapturingLayer, EventKind, emit_kind};
 //! use tracing_subscriber::layer::SubscriberExt;
 //! use tracing_subscriber::util::SubscriberInitExt;
 //!
@@ -35,7 +35,7 @@ use crate::event::ObservabilityEvent;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::Layer;
 
-/// In-memory `tracing_subscriber::Layer` that decodes every `rig_observe`
+/// In-memory `tracing_subscriber::Layer` that decodes every `rig_tap`
 /// event into an [`ObservabilityEvent`] and appends it to a shared buffer.
 ///
 /// Clone freely: the underlying `Arc<Mutex<Vec<_>>>` is shared.

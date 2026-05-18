@@ -1,5 +1,5 @@
 //! End-to-end: wire the public `CapturingLayer` (`subscriber` feature)
-//! to capture `rig_observe` events, exercise [`ObservedMemory`] over an
+//! to capture `rig_tap` events, exercise [`ObservedMemory`] over an
 //! in-memory `ConversationMemory`, and assert the captured envelope
 //! round-trips through the v1 schema.
 
@@ -12,7 +12,7 @@
 )]
 
 use rig::memory::{ConversationMemory, InMemoryConversationMemory};
-use rig_observe::{CapturingLayer, EventKind, ObservedMemory, SCHEMA_VERSION, emit_kind};
+use rig_tap::{CapturingLayer, EventKind, ObservedMemory, SCHEMA_VERSION, emit_kind};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 

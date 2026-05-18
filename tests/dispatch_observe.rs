@@ -18,7 +18,7 @@ use rig_compose::{
     KernelError, LocalTool, ToolDispatchAction, ToolDispatchHook, ToolInvocation, ToolRegistry,
     ToolSchema, dispatch_tool_invocations_with_hooks,
 };
-use rig_observe::{CapturingLayer, DispatchObserveHook, EventKind};
+use rig_tap::{CapturingLayer, DispatchObserveHook, EventKind};
 use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;

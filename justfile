@@ -1,4 +1,4 @@
-# rig-observe task runner.
+# rig-tap task runner.
 #
 #   brew install just
 #

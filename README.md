@@ -1,4 +1,4 @@
-# rig-observe
+# rig-tap
 
 Backend-agnostic observability event schema and taps for [Rig](https://crates.io/crates/rig-core)
 agents. Defines a stable, versioned `ObservabilityEvent` stream emitted via
@@ -24,16 +24,16 @@ points below.
 
 ## Quick start
 
-Wire a `tracing` subscriber that keeps the dedicated `rig_observe` target, then
+Wire a `tracing` subscriber that keeps the dedicated `rig_tap` target, then
 attach the hooks at the lifecycle boundary you want to observe:
 
 ```rust,no_run
-use rig_observe::{ObservedMemory, TelemetryHook};
+use rig_tap::{ObservedMemory, TelemetryHook};
 use tracing_subscriber::{EnvFilter, prelude::*};
 
 fn install_observe_sink() {
     tracing_subscriber::registry()
-        .with(EnvFilter::new("rig_observe=info"))
+        .with(EnvFilter::new("rig_tap=info"))
         .with(tracing_subscriber::fmt::layer().json())
         .init();
 }
@@ -55,7 +55,7 @@ collect typed `ObservabilityEvent` values in-process.
 
 ## Architecture
 
-`rig-observe` acts as a tap, listening to various hooks in the Rig lifecycle and writing uniform JSON payloads into the `tracing` ecosystem under a dedicated `rig_observe` target.
+`rig-tap` acts as a tap, listening to various hooks in the Rig lifecycle and writing uniform JSON payloads into the `tracing` ecosystem under a dedicated `rig_tap` target.
 
 ```text
 ┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
@@ -66,7 +66,7 @@ collect typed `ObservabilityEvent` values in-process.
                                                     │                 │
 ┌─────────────────┐       ┌─────────────────┐       │ tracing::info!  │
 │                 │       │                 │       │  (target:       │
-│  Host Runtime   │──────►│DispatchObserve..├──────►│  "rig_observe") │
+│  Host Runtime   │──────►│DispatchObserve..├──────►│  "rig_tap") │
 │  (rig_compose)  │       │                 │       │                 │
 └─────────────────┘       └─────────────────┘       │                 │
                                                     │                 │
@@ -86,7 +86,7 @@ collect typed `ObservabilityEvent` values in-process.
 
 ## Wire format
 
-All events are flat JSON serialized via `tracing::info!(target: "rig_observe", event = %json)`:
+All events are flat JSON serialized via `tracing::info!(target: "rig_tap", event = %json)`:
 
 ```json
 {
@@ -134,7 +134,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 
 fn main() {
     tracing_subscriber::registry()
-        .with(EnvFilter::new("rig_observe=info"))
+        .with(EnvFilter::new("rig_tap=info"))
         .with(tracing_subscriber::fmt::layer().json())
         .init();
 
@@ -150,7 +150,7 @@ that parses the `event` field via `serde_json::from_str::<ObservabilityEvent>`.
 This crate is additive to Rig's existing GenAI span conventions
 (`gen_ai.input.messages`, `gen_ai.usage.input_tokens`, etc.). Consumers using
 `tracing-opentelemetry` for Phoenix / Langfuse keep their existing setup;
-`rig_observe` events live under a separate target and can be filtered
+`rig_tap` events live under a separate target and can be filtered
 independently.
 
 ## Status

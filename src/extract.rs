@@ -24,7 +24,7 @@ impl Visit for EventVisitor {
 }
 
 /// Extracts an [`ObservabilityEvent`] from a given tracing event, if the event
-/// belongs to the `rig_observe` target and is valid JSON.
+/// belongs to the `rig_tap` target and is valid JSON.
 ///
 /// This helper is intended for consumers who want to write their own custom
 /// `tracing_subscriber::Layer` without duplicating the extraction boilerplate.

@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single agent. Opt in to synthetic `tool.skipped` / `tool.terminated`
   emissions via `ChainedHook::observe_with`.
 - `emit` helper that serializes an event under
-  `tracing::info!(target = "rig_observe", event = %json)`.
+  `tracing::info!(target = "rig_tap", event = %json)`.
 - Optional `subscriber` feature exposing `CapturingLayer`, a public
   `tracing_subscriber::Layer` that buffers decoded
   `ObservabilityEvent`s in memory. Off by default; intended for tests,

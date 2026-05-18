@@ -52,7 +52,7 @@ use crate::event::{EventKind, PAYLOAD_TRUNCATE_BYTES, truncate_utf8};
 ///     LocalTool, ToolRegistry, ToolSchema, ToolInvocation,
 ///     dispatch_tool_invocations_with_hooks,
 /// };
-/// use rig_observe::DispatchObserveHook;
+/// use rig_tap::DispatchObserveHook;
 /// use serde_json::json;
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,4 +1,4 @@
-# rig-observe — Copilot Instructions
+# rig-tap — Copilot Instructions
 
 See [AGENTS.md](../AGENTS.md) for the authoritative copy. Summary:
 

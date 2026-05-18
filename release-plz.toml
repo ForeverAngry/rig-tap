@@ -47,7 +47,7 @@ commit_parsers = [
 ]
 
 [[package]]
-name = "rig-observe"
+name = "rig-tap"
 semver_check = true
 git_release_enable = true
 git_tag_enable = true

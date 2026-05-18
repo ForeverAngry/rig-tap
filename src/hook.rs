@@ -69,12 +69,12 @@ impl TelemetryHookConfig {
 /// [`PromptHook`] lifecycle methods.
 ///
 /// `M` is the [`CompletionModel`] used by the agent. The hook is generic so a
-/// single `rig-observe` build can attach to OpenAI, Anthropic, Ollama, etc.
+/// single `rig-tap` build can attach to OpenAI, Anthropic, Ollama, etc.
 ///
 /// # Example
 ///
 /// ```no_run
-/// use rig_observe::{TelemetryHook, TelemetryHookConfig};
+/// use rig_tap::{TelemetryHook, TelemetryHookConfig};
 ///
 /// # fn make_hook<M: rig::completion::CompletionModel>() -> TelemetryHook<M> {
 /// TelemetryHook::new(TelemetryHookConfig::new("gpt-4o", "thread-1"))

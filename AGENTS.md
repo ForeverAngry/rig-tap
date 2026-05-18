@@ -1,6 +1,6 @@
 # Context for Coding Agents (Claude, Copilot, etc.)
 
-This crate (`rig-observe`) is part of the `rig-ecosystem` companion crates. Its purpose is to provide a backend-agnostic `tracing` event schema for observability and hooks that tap into `rig-core` and `rig-compose` lifecycles.
+This crate (`rig-tap`) is part of the `rig-ecosystem` companion crates. Its purpose is to provide a backend-agnostic `tracing` event schema for observability and hooks that tap into `rig-core` and `rig-compose` lifecycles.
 
 ## Project conventions
 
