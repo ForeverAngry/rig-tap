@@ -900,9 +900,9 @@ dependencies = [
 
 [[package]]
 name = "rig-compose"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a6f7cf74bbebfd2dc9fb4fe05fafd8f83b096c6584dd4f1c842ba663e493351"
+checksum = "6f8e3db435de633343610d7e78a75763f7c5a5c8b3670d7d2e15fbde164d3204"
 dependencies = [
  "async-trait",
  "dashmap",

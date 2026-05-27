@@ -1,4 +1,11 @@
-//! Backend-agnostic observability event schema and taps for [Rig](https://crates.io/crates/rig-core).
+//! Emits uniform telemetry for [Rig](https://crates.io/crates/rig-core) agents
+//! and companion crates.
+//!
+//! `rig-tap` defines a stable, versioned [`ObservabilityEvent`] stream for
+//! prompt, tool, context, memory, and dispatch lifecycle events. Producer
+//! crates can use the same event vocabulary whether the event came from a Rig
+//! agent hook, `rig-compose` dispatch, `rig-memvid` memory behavior, or host
+//! application code.
 //!
 //! See the crate [README](../README.md) for the full schema and consumer
 //! recipe. The two consumer-facing types are:
@@ -13,10 +20,10 @@
 //! # Wire format
 //!
 //! All events are emitted as a single `tracing::info!` event on the
-//! [`EVENT_TARGET`] target (`"rig_tap"`) with a single
-//! string field `event` carrying the JSON-encoded
-//! [`ObservabilityEvent`]. Consumers attach a `tracing_subscriber::Layer`
-//! filtered to that target.
+//! [`EVENT_TARGET`] target (`"rig_tap"`). The string field `event` carries the
+//! JSON-encoded [`ObservabilityEvent`], while scalar `rig_tap.*` fields expose
+//! `kind`, `conversation_id`, `version`, `tick`, and `occurred_at_millis` for
+//! OpenTelemetry collector routing and indexing without JSON parsing.
 //!
 //! # Subscriber sizing
 //!
@@ -64,7 +71,8 @@ pub use dispatch::DispatchObserveHook;
 pub use emit::{EVENT_TARGET, build_event, emit, emit_kind, try_emit};
 pub use error::Error;
 pub use event::{
-    EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION, truncate_utf8,
+    EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION, ScalarFields,
+    truncate_utf8,
 };
 pub use extract::extract_event;
 pub use hook::{ConversationIdResolver, ModelResolver, TelemetryHook, TelemetryHookConfig};
