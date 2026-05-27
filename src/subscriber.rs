@@ -32,6 +32,7 @@
 //! ```
 
 use crate::event::ObservabilityEvent;
+use crate::query::EventQuery;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::Layer;
 
@@ -58,6 +59,11 @@ impl CapturingLayer {
             Ok(guard) => guard.clone(),
             Err(poison) => poison.into_inner().clone(),
         }
+    }
+
+    /// Return a query view over a copy of all captured events.
+    pub fn query(&self) -> EventQuery {
+        EventQuery::new(self.snapshot())
     }
 
     /// Clear the captured buffer. No-op if the mutex is poisoned and cannot
