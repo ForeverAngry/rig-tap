@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Emit compose lifecycle telemetry
+- Add `EventQuery` and `EventFilter` for querying captured
+  `ObservabilityEvent` snapshots, plus `CapturingLayer::query()` under the
+  `subscriber` feature.
 
 ## [0.1.0] - Unreleased
 

@@ -44,6 +44,9 @@ kernels, and application code to speak the same telemetry language.
   `compose.*` events around `GenericAgent` step and skill execution.
 - **`ObservedMemory<M>`** — decorator that wraps any `rig::memory::ConversationMemory`
   and emits `context.sampled` on every `load`.
+- **`EventQuery` + `EventFilter`** — in-process query helpers for captured
+  `ObservabilityEvent` snapshots. Useful for tests, demos, and small local
+  dashboards without adding a service runtime.
 - **`ChainedHook<A, B>`** — compose two `PromptHook`s on a single agent (e.g.
   pair `MemvidPersistHook` with `TelemetryHook`).
 
@@ -78,7 +81,8 @@ For kernel-direct tool dispatch, enable the `compose` feature and register
 can be passed to `GenericAgentBuilder::with_lifecycle_hook` to observe the
 agent step and skill loop. For deterministic tests or examples, enable
 `subscriber` and use `CapturingLayer` to collect typed `ObservabilityEvent`
-values in-process.
+values in-process, then call `capture.query().filter(&EventFilter::new().kind("tool.completed"))`
+to inspect a bounded snapshot.
 
 ## Architecture
 
@@ -188,6 +192,11 @@ fn main() {
 
 A consumer wanting typed events can attach a custom `tracing_subscriber::Layer`
 that parses the `event` field via `serde_json::from_str::<ObservabilityEvent>`.
+For in-process tests, demos, or local dashboards, the optional `subscriber`
+feature exposes `CapturingLayer::query()` and the default-build
+`EventQuery`/`EventFilter` helpers for filtering by conversation, kind, tick
+range, and scalar correlators such as tool name, call ID, skill ID, kernel ID,
+or model.
 
 ## Coexistence with `rig-core::telemetry`
 

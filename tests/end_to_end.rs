@@ -12,7 +12,7 @@
 )]
 
 use rig::memory::{ConversationMemory, InMemoryConversationMemory};
-use rig_tap::{CapturingLayer, EventKind, ObservedMemory, SCHEMA_VERSION, emit_kind};
+use rig_tap::{CapturingLayer, EventFilter, EventKind, ObservedMemory, SCHEMA_VERSION, emit_kind};
 use std::sync::{Arc, Mutex};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
@@ -146,6 +146,45 @@ async fn ticks_are_monotonic_across_events() {
             window[1].tick,
         );
     }
+}
+
+#[tokio::test]
+async fn capturing_layer_exposes_query_snapshot() {
+    let capture = CapturingLayer::new();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let _guard = subscriber.set_default();
+
+    emit_kind(
+        "conv-a",
+        EventKind::ToolInvoked {
+            tool_name: "search".into(),
+            provider_call_id: None,
+            call_id: "call-a".into(),
+            args_json: "{}".into(),
+            truncated: false,
+        },
+    );
+    emit_kind(
+        "conv-b",
+        EventKind::PromptStarted {
+            model: "model-b".into(),
+            messages_in: 1,
+        },
+    );
+
+    let query = capture.query();
+    let tool_events = query.filter(
+        &EventFilter::new()
+            .conversation_id("conv-a")
+            .kind("tool.invoked")
+            .tool_name("search")
+            .call_id("call-a"),
+    );
+
+    assert_eq!(query.len(), 2);
+    assert_eq!(tool_events.len(), 1);
+    assert_eq!(query.count_by_kind().get("tool.invoked"), Some(&1));
+    assert_eq!(query.conversations(), vec!["conv-a", "conv-b"]);
 }
 
 #[derive(Clone, Default)]

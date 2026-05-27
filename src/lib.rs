@@ -62,6 +62,7 @@ mod error;
 mod event;
 mod hook;
 mod observed_memory;
+mod query;
 #[cfg(feature = "subscriber")]
 mod subscriber;
 
@@ -77,5 +78,6 @@ pub use event::{
 pub use extract::extract_event;
 pub use hook::{ConversationIdResolver, ModelResolver, TelemetryHook, TelemetryHookConfig};
 pub use observed_memory::ObservedMemory;
+pub use query::{EventFilter, EventQuery};
 #[cfg(feature = "subscriber")]
 pub use subscriber::CapturingLayer;
