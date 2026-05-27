@@ -57,6 +57,26 @@ impl ObservabilityEvent {
     }
 }
 
+/// Per-variant scalar correlation fields surfaced as direct `tracing`
+/// attributes alongside the JSON event blob. See [`EventKind::scalar_fields`].
+///
+/// Absent fields are represented as `""` rather than `Option<&str>` because
+/// `tracing` 0.1's static-field model requires every field at the call site
+/// to satisfy `tracing::Value`, which is not implemented for `Option<T>`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarFields<'a> {
+    /// `compose.*` event kernel identifier.
+    pub kernel_id: &'a str,
+    /// `tool.*` and `compose.retry_attempt` target/tool name.
+    pub tool_name: &'a str,
+    /// `tool.*` stable correlation identifier.
+    pub call_id: &'a str,
+    /// `compose.skill_resolved` / `compose.loop_iteration` skill identifier.
+    pub skill_id: &'a str,
+    /// `prompt.*` model identifier.
+    pub model: &'a str,
+}
+
 /// Payload variants. Tagged on the wire as `"kind": "<dotted.name>"`.
 ///
 /// New variants are additive; rename or remove is a breaking change requiring
@@ -193,6 +213,89 @@ pub enum EventKind {
         /// Byte size of the written frame's text payload.
         bytes_written: usize,
     },
+    /// A `rig-compose` kernel became active for a conversation.
+    #[serde(rename = "compose.kernel_start")]
+    ComposeKernelStart {
+        /// Stable kernel identifier chosen by the producer.
+        kernel_id: String,
+        /// Number of skills registered at startup, when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        skills_registered: Option<usize>,
+        /// Number of tools registered at startup, when known.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tools_registered: Option<usize>,
+    },
+    /// A `rig-compose` kernel stopped processing.
+    #[serde(rename = "compose.kernel_shutdown")]
+    ComposeKernelShutdown {
+        /// Stable kernel identifier chosen by the producer.
+        kernel_id: String,
+        /// Producer-specific shutdown reason (e.g. `"normal"`, `"error"`).
+        reason: String,
+    },
+    /// One iteration of a `rig-compose` agent/kernel loop began.
+    #[serde(rename = "compose.loop_iteration")]
+    ComposeLoopIteration {
+        /// Stable kernel identifier chosen by the producer.
+        kernel_id: String,
+        /// Monotonic iteration counter inside the kernel.
+        iteration: u64,
+        /// Skill being considered or executed during this iteration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        skill_id: Option<String>,
+        /// Current confidence score, when exposed by the producer.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        confidence: Option<f64>,
+    },
+    /// A `rig-compose` skill resolution completed.
+    #[serde(rename = "compose.skill_resolved")]
+    ComposeSkillResolved {
+        /// Stable kernel identifier chosen by the producer.
+        kernel_id: String,
+        /// Skill identifier.
+        skill_id: String,
+        /// Whether the skill applied to the current context.
+        applies: bool,
+        /// Confidence delta returned by the skill, when present.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        delta: Option<f64>,
+        /// Post-application confidence score, when exposed by the producer.
+        /// For `applies = false` resolutions this is the unchanged context
+        /// confidence; for `applies = true` it reflects `confidence + delta`
+        /// clamped to `[0.0, 1.0]`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        confidence: Option<f64>,
+    },
+    /// A retry attempt occurred in a `rig-compose` dispatch or recovery path.
+    ///
+    /// `rig-tap` does not emit this variant itself: the
+    /// [`crate::DispatchObserveHook`] only observes the lifecycle hooks
+    /// surfaced by `rig-compose` and `rig-compose` does not currently expose
+    /// a per-tool retry hook. Producers with their own retry policy (custom
+    /// skills, transports, or higher-level orchestrators) should emit this
+    /// variant directly via [`crate::emit_kind`] so consumers receive a
+    /// consistent shape.
+    #[serde(rename = "compose.retry_attempt")]
+    ComposeRetryAttempt {
+        /// Stable kernel identifier chosen by the producer.
+        kernel_id: String,
+        /// Tool or operation being retried.
+        target: String,
+        /// One-based retry attempt number.
+        attempt: u64,
+        /// Retry classification chosen by the producer.
+        classification: String,
+    },
+    /// A `rig-compose` recovery path completed.
+    #[serde(rename = "compose.recovery")]
+    ComposeRecovery {
+        /// Stable kernel identifier chosen by the producer.
+        kernel_id: String,
+        /// Recovery reason or source error classification.
+        reason: String,
+        /// Whether the recovery path restored normal execution.
+        recovered: bool,
+    },
 }
 
 impl EventKind {
@@ -209,7 +312,82 @@ impl EventKind {
             EventKind::ContextCompacted { .. } => "context.compacted",
             EventKind::MemoryDemoted { .. } => "memory.demoted",
             EventKind::MemoryFrameWritten { .. } => "memory.frame_written",
+            EventKind::ComposeKernelStart { .. } => "compose.kernel_start",
+            EventKind::ComposeKernelShutdown { .. } => "compose.kernel_shutdown",
+            EventKind::ComposeLoopIteration { .. } => "compose.loop_iteration",
+            EventKind::ComposeSkillResolved { .. } => "compose.skill_resolved",
+            EventKind::ComposeRetryAttempt { .. } => "compose.retry_attempt",
+            EventKind::ComposeRecovery { .. } => "compose.recovery",
         }
+    }
+
+    /// Extract the per-variant scalar correlation fields that
+    /// [`crate::emit()`] surfaces directly on the `tracing` event so that
+    /// OpenTelemetry collectors and log indexers can route on them without
+    /// parsing the JSON `event` blob.
+    ///
+    /// Absent fields are returned as `""` rather than `Option<&str>`
+    /// because `tracing` 0.1's static-field model does not accept
+    /// `Option<&str>` as a `Value`. Consumers should filter
+    /// `rig_tap.<field> != ""` to detect presence.
+    pub fn scalar_fields(&self) -> ScalarFields<'_> {
+        let mut f = ScalarFields::default();
+        match self {
+            EventKind::PromptStarted { model, .. } => f.model = model,
+            EventKind::PromptCompleted { model, .. } => f.model = model,
+            EventKind::ToolInvoked {
+                tool_name, call_id, ..
+            }
+            | EventKind::ToolCompleted {
+                tool_name, call_id, ..
+            } => {
+                f.tool_name = tool_name;
+                f.call_id = call_id;
+            }
+            EventKind::ToolSkipped {
+                tool_name, call_id, ..
+            }
+            | EventKind::ToolTerminated {
+                tool_name, call_id, ..
+            } => {
+                f.tool_name = tool_name;
+                f.call_id = call_id;
+            }
+            EventKind::ComposeKernelStart { kernel_id, .. }
+            | EventKind::ComposeKernelShutdown { kernel_id, .. }
+            | EventKind::ComposeRecovery { kernel_id, .. } => {
+                f.kernel_id = kernel_id;
+            }
+            EventKind::ComposeLoopIteration {
+                kernel_id,
+                skill_id,
+                ..
+            } => {
+                f.kernel_id = kernel_id;
+                if let Some(s) = skill_id {
+                    f.skill_id = s;
+                }
+            }
+            EventKind::ComposeSkillResolved {
+                kernel_id,
+                skill_id,
+                ..
+            } => {
+                f.kernel_id = kernel_id;
+                f.skill_id = skill_id;
+            }
+            EventKind::ComposeRetryAttempt {
+                kernel_id, target, ..
+            } => {
+                f.kernel_id = kernel_id;
+                f.tool_name = target;
+            }
+            EventKind::ContextSampled { .. }
+            | EventKind::ContextCompacted { .. }
+            | EventKind::MemoryDemoted { .. }
+            | EventKind::MemoryFrameWritten { .. } => {}
+        }
+        f
     }
 
     /// Returns `true` if the event is part of the prompt lifecycle (`prompt.started`, `prompt.completed`).
@@ -239,6 +417,19 @@ impl EventKind {
                 | EventKind::ContextCompacted { .. }
                 | EventKind::MemoryDemoted { .. }
                 | EventKind::MemoryFrameWritten { .. }
+        )
+    }
+
+    /// Returns `true` if the event is related to a `rig-compose` kernel or agent loop.
+    pub fn is_compose_related(&self) -> bool {
+        matches!(
+            self,
+            EventKind::ComposeKernelStart { .. }
+                | EventKind::ComposeKernelShutdown { .. }
+                | EventKind::ComposeLoopIteration { .. }
+                | EventKind::ComposeSkillResolved { .. }
+                | EventKind::ComposeRetryAttempt { .. }
+                | EventKind::ComposeRecovery { .. }
         )
     }
 
@@ -384,6 +575,39 @@ mod tests {
                 frame_count_after: Some(7),
                 bytes_written: 42,
             },
+            EventKind::ComposeKernelStart {
+                kernel_id: "k".into(),
+                skills_registered: Some(2),
+                tools_registered: Some(3),
+            },
+            EventKind::ComposeKernelShutdown {
+                kernel_id: "k".into(),
+                reason: "normal".into(),
+            },
+            EventKind::ComposeLoopIteration {
+                kernel_id: "k".into(),
+                iteration: 1,
+                skill_id: Some("skill".into()),
+                confidence: Some(0.5),
+            },
+            EventKind::ComposeSkillResolved {
+                kernel_id: "k".into(),
+                skill_id: "skill".into(),
+                applies: true,
+                delta: Some(0.25),
+                confidence: Some(0.75),
+            },
+            EventKind::ComposeRetryAttempt {
+                kernel_id: "k".into(),
+                target: "tool".into(),
+                attempt: 2,
+                classification: "transient".into(),
+            },
+            EventKind::ComposeRecovery {
+                kernel_id: "k".into(),
+                reason: "retry_exhausted".into(),
+                recovered: false,
+            },
         ];
 
         for kind in kinds {
@@ -394,5 +618,20 @@ mod tests {
             let back: ObservabilityEvent = serde_json::from_value(json).unwrap();
             assert_eq!(back.kind, kind);
         }
+    }
+
+    #[test]
+    fn compose_events_are_classified() {
+        let event = EventKind::ComposeLoopIteration {
+            kernel_id: "kernel".into(),
+            iteration: 4,
+            skill_id: None,
+            confidence: None,
+        };
+
+        assert!(event.is_compose_related());
+        assert!(!event.is_prompt_related());
+        assert!(!event.is_tool_related());
+        assert!(!event.is_memory_related());
     }
 }

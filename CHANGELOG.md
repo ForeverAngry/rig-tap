@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - Unreleased
 
+### Fixed
+
+- `DispatchObserveHook` now emits `tool.skipped` for `rig-compose` synthetic
+  skip outcomes instead of reporting them as `tool.completed`.
+- `rig_tap` tracing events now include stable scalar `rig_tap.*` fields next
+  to the JSON envelope so OpenTelemetry collectors can route and index them
+  without parsing the `event` JSON string.
+
 ### Added
 
-- `ObservabilityEvent` v1 schema with ten event kinds covering the
-  prompt / tool / context / memory lifecycle.
+- `ObservabilityEvent` v1 schema covering the prompt / tool / context /
+  memory lifecycle plus additive `compose.*` kernel-loop event kinds for
+  kernel start/shutdown, loop iteration, skill resolution, retry attempts,
+  and recovery paths.
 - `TelemetryHook<M>: PromptHook<M>` that emits `prompt.*` and `tool.*`
   events.
 - `TelemetryHook::with_conversation_id_resolver` — per-request escape
@@ -34,4 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   examples, and small in-process tools.
 - Optional `compose` feature exposing `DispatchObserveHook`, a
   `rig_compose::ToolDispatchHook` adapter that emits `tool.invoked`,
-  `tool.completed`, and `tool.terminated` from kernel-direct dispatch.
+  `tool.completed`, and `tool.terminated` from kernel-direct dispatch. The
+  same adapter now implements `rig_compose::AgentLifecycleHook` and emits
+  `compose.*` kernel-loop events from `GenericAgent` step execution.

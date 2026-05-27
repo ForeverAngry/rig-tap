@@ -1,9 +1,9 @@
 //! Tracing transport for [`ObservabilityEvent`].
 //!
 //! All events are emitted as a single `tracing::info!` call under the
-//! `rig_tap` target with a single `event` field carrying the JSON-encoded
-//! envelope. Consumers attach a `tracing_subscriber::Layer` filtered to that
-//! target.
+//! `rig_tap` target. The legacy `event` field carries the JSON-encoded
+//! envelope, while stable scalar `rig_tap.*` fields make OpenTelemetry
+//! collector routing and indexing possible without JSON parsing.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -50,7 +50,24 @@ pub fn build_event(conversation_id: impl Into<String>, kind: EventKind) -> Obser
 /// failures rather than propagating them.
 pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
     let json = serde_json::to_string(event)?;
-    tracing::info!(target: EVENT_TARGET, event = %json);
+    let fields = event.kind.scalar_fields();
+    tracing::info!(
+        target: EVENT_TARGET,
+        event = %json,
+        rig_tap.version = event.version,
+        rig_tap.kind = event.kind.discriminant(),
+        rig_tap.conversation_id = %event.conversation_id,
+        rig_tap.tick = event.tick,
+        rig_tap.occurred_at_millis = event.occurred_at_millis,
+        // Per-variant scalar correlators. Absent values are emitted as
+        // empty strings (see `ScalarFields` rustdoc) — collectors should
+        // filter `rig_tap.<field> != ""` to detect presence.
+        rig_tap.kernel_id = fields.kernel_id,
+        rig_tap.tool_name = fields.tool_name,
+        rig_tap.call_id = fields.call_id,
+        rig_tap.skill_id = fields.skill_id,
+        rig_tap.model = fields.model,
+    );
     Ok(())
 }
 

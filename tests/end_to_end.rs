@@ -13,6 +13,9 @@
 
 use rig::memory::{ConversationMemory, InMemoryConversationMemory};
 use rig_tap::{CapturingLayer, EventKind, ObservedMemory, SCHEMA_VERSION, emit_kind};
+use std::sync::{Arc, Mutex};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -86,6 +89,38 @@ async fn emit_kind_writes_full_envelope() {
 }
 
 #[tokio::test]
+async fn emit_kind_writes_otel_routable_scalar_fields() {
+    let fields = FieldCaptureLayer::default();
+    let subscriber = tracing_subscriber::registry().with(fields.clone());
+    let _guard = subscriber.set_default();
+
+    emit_kind(
+        "conv-otel",
+        EventKind::PromptStarted {
+            model: "model-a".into(),
+            messages_in: 2,
+        },
+    );
+
+    let snapshots = fields.snapshot();
+    assert_eq!(snapshots.len(), 1);
+    let snapshot = &snapshots[0];
+    assert_eq!(snapshot.target, "rig_tap");
+    assert_eq!(snapshot.kind.as_deref(), Some("prompt.started"));
+    assert_eq!(snapshot.conversation_id.as_deref(), Some("conv-otel"));
+    assert_eq!(snapshot.version, Some(SCHEMA_VERSION.into()));
+    assert!(snapshot.tick.is_some());
+    assert!(snapshot.occurred_at_millis.is_some());
+    assert!(
+        snapshot
+            .event_json
+            .as_deref()
+            .unwrap()
+            .contains("prompt.started")
+    );
+}
+
+#[tokio::test]
 async fn ticks_are_monotonic_across_events() {
     let capture = CapturingLayer::new();
     let subscriber = tracing_subscriber::registry().with(capture.clone());
@@ -110,5 +145,83 @@ async fn ticks_are_monotonic_across_events() {
             window[0].tick,
             window[1].tick,
         );
+    }
+}
+
+#[derive(Clone, Default)]
+struct FieldCaptureLayer {
+    snapshots: Arc<Mutex<Vec<FieldSnapshot>>>,
+}
+
+impl FieldCaptureLayer {
+    fn snapshot(&self) -> Vec<FieldSnapshot> {
+        self.snapshots.lock().unwrap().clone()
+    }
+}
+
+impl<S> Layer<S> for FieldCaptureLayer
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut snapshot = FieldSnapshot {
+            target: event.metadata().target().to_string(),
+            ..FieldSnapshot::default()
+        };
+        event.record(&mut snapshot);
+        self.snapshots.lock().unwrap().push(snapshot);
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FieldSnapshot {
+    target: String,
+    event_json: Option<String>,
+    version: Option<u64>,
+    kind: Option<String>,
+    conversation_id: Option<String>,
+    tick: Option<u64>,
+    occurred_at_millis: Option<u64>,
+}
+
+impl Visit for FieldSnapshot {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        match field.name() {
+            "event" => self.event_json = Some(value.to_string()),
+            "rig_tap.kind" => self.kind = Some(value.to_string()),
+            "rig_tap.conversation_id" => self.conversation_id = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        match field.name() {
+            "rig_tap.version" => self.version = Some(value),
+            "rig_tap.tick" => self.tick = Some(value),
+            "rig_tap.occurred_at_millis" => self.occurred_at_millis = Some(value),
+            _ => {}
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        let rendered = format!("{value:?}");
+        let rendered = rendered.trim_matches('"');
+        match field.name() {
+            "event" if self.event_json.is_none() => self.event_json = Some(rendered.to_string()),
+            "rig_tap.version" if self.version.is_none() => self.version = rendered.parse().ok(),
+            "rig_tap.kind" if self.kind.is_none() => self.kind = Some(rendered.to_string()),
+            "rig_tap.conversation_id" if self.conversation_id.is_none() => {
+                self.conversation_id = Some(rendered.to_string());
+            }
+            "rig_tap.tick" if self.tick.is_none() => self.tick = rendered.parse().ok(),
+            "rig_tap.occurred_at_millis" if self.occurred_at_millis.is_none() => {
+                self.occurred_at_millis = rendered.parse().ok();
+            }
+            _ => {}
+        }
     }
 }
