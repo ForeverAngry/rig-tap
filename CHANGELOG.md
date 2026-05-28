@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/ForeverAngry/rig-tap/compare/v0.2.0...v0.2.1) - 2026-05-28
+
+### Documentation
+
+- Bump documented crate version 0.1.0 -> 0.2.0 ([#9](https://github.com/ForeverAngry/rig-tap/pull/9))
+
 ## [0.2.0](https://github.com/ForeverAngry/rig-tap/compare/v0.1.2...v0.2.0) - 2026-05-28
 
 ### Added
