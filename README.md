@@ -396,7 +396,7 @@ are propagated as span attributes automatically.
 
 ## Status
 
-Crate version: `0.1.0`. Rust edition: 2024. MSRV: 1.89. The library is
+Crate version: `0.2.0`. Rust edition: 2024. MSRV: 1.89. The library is
 runtime-agnostic and emits through `tracing`; production consumers should use a
 non-blocking tracing sink when exporting events off-host. The optional
 `subscriber` feature is for tests/examples, while the optional `compose`
