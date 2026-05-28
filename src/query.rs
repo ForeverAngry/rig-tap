@@ -263,6 +263,7 @@ mod tests {
             occurred_at_millis: 1_715_000_000_000 + tick,
             tick,
             conversation_id: conversation_id.into(),
+            span_id: None,
             kind,
         }
     }

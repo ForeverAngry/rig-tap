@@ -44,6 +44,20 @@ subscriber = ["dep:tracing-subscriber"]
 # events for the kernel-direct dispatch path (callers that don't use the
 # rig agent `PromptHook` surface).
 compose = ["dep:rig-compose", "dep:async-trait"]
+# Enables hosted-tool extraction helpers for OpenAI Responses-style
+# providers. The extractor walks raw JSON payloads (e.g. the
+# `ResponsesWebSocketDoneEvent.response` value) because rig-core's
+# typed `Output` enum collapses hosted-tool items via `#[serde(other)]`,
+# discarding the payload before it reaches `rig-tap`. No additional
+# runtime dependency is pulled by this feature.
+openai-responses = []
+# Enables the `ResponsesSessionObserver` state machine and the
+# `ObservedResponsesSession` decorator for `rig-core`'s
+# `responses_api::websocket::ResponsesWebSocketSession`. Pulls
+# `rig-core`'s `websocket` feature (which brings `tokio-tungstenite` and
+# `rustls`). Implies `openai-responses`. Not available on wasm targets;
+# the implementation is `cfg`-gated to `not(target_family = "wasm")`.
+openai-responses-websocket = ["openai-responses", "rig/websocket"]
 
 [lints.clippy]
 dbg_macro = "forbid"

@@ -30,6 +30,17 @@ pub fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+/// Return the numeric id of the currently-active `tracing::Span`, if any.
+///
+/// Mirrors [`tracing::span::Id::into_u64`]. Subscribers that respect
+/// span context (e.g. `tracing-opentelemetry`) attach this id to every
+/// event automatically; surfacing it on the envelope lets consumers
+/// reading only structured fields stitch events into the same
+/// waterfall.
+pub fn current_span_id() -> Option<u64> {
+    tracing::Span::current().id().map(|id| id.into_u64())
+}
+
 /// Build a fully-formed [`ObservabilityEvent`] for `kind` belonging to
 /// `conversation_id`, stamped with the next tick and current wall time.
 pub fn build_event(conversation_id: impl Into<String>, kind: EventKind) -> ObservabilityEvent {
@@ -38,6 +49,7 @@ pub fn build_event(conversation_id: impl Into<String>, kind: EventKind) -> Obser
         occurred_at_millis: now_millis(),
         tick: next_tick(),
         conversation_id: conversation_id.into(),
+        span_id: current_span_id(),
         kind,
     }
 }
@@ -59,6 +71,12 @@ pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
         rig_tap.conversation_id = %event.conversation_id,
         rig_tap.tick = event.tick,
         rig_tap.occurred_at_millis = event.occurred_at_millis,
+        // Numeric `tracing::Span` id captured at emit time. `0` =
+        // absent (no span was active). Consumers correlating via
+        // `tracing-opentelemetry` already get the span via subscriber
+        // context; this field is for collectors that read only the
+        // structured `rig_tap.*` attributes.
+        rig_tap.span_id = event.span_id.unwrap_or(0),
         // Per-variant scalar correlators. Absent values are emitted as
         // empty strings (see `ScalarFields` rustdoc) — collectors should
         // filter `rig_tap.<field> != ""` to detect presence.
@@ -67,6 +85,11 @@ pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
         rig_tap.call_id = fields.call_id,
         rig_tap.skill_id = fields.skill_id,
         rig_tap.model = fields.model,
+        rig_tap.response_id = fields.response_id,
+        rig_tap.previous_response_id = fields.previous_response_id,
+        rig_tap.dataset = fields.dataset,
+        rig_tap.metric = fields.metric,
+        rig_tap.verdict = fields.verdict,
     );
     Ok(())
 }

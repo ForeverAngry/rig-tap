@@ -10,6 +10,7 @@ use rig::completion::{CompletionModel, CompletionResponse, Message};
 
 use crate::emit::emit_kind;
 use crate::event::{EventKind, PAYLOAD_TRUNCATE_BYTES, truncate_utf8};
+use crate::sampling::{AlwaysSample, SamplingPolicy};
 
 /// Caller-supplied resolver for the conversation ID stamped on emitted
 /// events. Consulted on every emission; when it returns `Some(id)`, that
@@ -30,6 +31,21 @@ pub type ConversationIdResolver = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 /// When set and the resolver returns `Some(model)`, that value is stamped
 /// on `prompt.completed` instead of [`TelemetryHookConfig::model`].
 pub type ModelResolver<R> = Arc<dyn Fn(&CompletionResponse<R>) -> Option<String> + Send + Sync>;
+
+/// Caller-supplied resolver that returns the chain ancestor for the current
+/// turn (the `previous_response_id` argument sent to the provider) so it can
+/// be stamped on `prompt.completed`.
+///
+/// Useful for stateful endpoints — OpenAI Responses, future Anthropic and
+/// Google equivalents — where the host runtime tracks the chain itself
+/// (typically in a task-local or session object) and the provider response
+/// payload does not echo the value back. The Rig `PromptHook` signature
+/// does not currently propagate it, so this is the escape hatch.
+///
+/// When set and the resolver returns `Some(id)`, that value is stamped on
+/// `prompt.completed`; `None` leaves the field unset.
+pub type PreviousResponseIdResolver<R> =
+    Arc<dyn Fn(&CompletionResponse<R>) -> Option<String> + Send + Sync>;
 
 /// Conversation identifier to stamp on emitted events when the agent runtime
 /// does not surface one to the hook. The Rig `PromptHook` signature does not
@@ -84,6 +100,8 @@ pub struct TelemetryHook<M: CompletionModel> {
     config: TelemetryHookConfig,
     conversation_id_resolver: Option<ConversationIdResolver>,
     model_resolver: Option<ModelResolver<M::Response>>,
+    previous_response_id_resolver: Option<PreviousResponseIdResolver<M::Response>>,
+    sampling: Arc<dyn SamplingPolicy>,
     _model: PhantomData<fn() -> M>,
 }
 
@@ -94,6 +112,8 @@ impl<M: CompletionModel> TelemetryHook<M> {
             config,
             conversation_id_resolver: None,
             model_resolver: None,
+            previous_response_id_resolver: None,
+            sampling: Arc::new(AlwaysSample),
             _model: PhantomData,
         }
     }
@@ -138,6 +158,56 @@ impl<M: CompletionModel> TelemetryHook<M> {
         self
     }
 
+    /// Register a resolver that returns the chain ancestor
+    /// (`previous_response_id`) sent to the provider for the current turn.
+    /// When the resolver returns `Some(id)`, that value is stamped on
+    /// `prompt.completed`'s `previous_response_id` field.
+    ///
+    /// Use this with stateful endpoints — OpenAI Responses, future
+    /// Anthropic/Google equivalents — where the host runtime tracks the
+    /// chain (typically in a task-local or session object) and the
+    /// provider response payload does not echo the value back.
+    #[must_use]
+    pub fn with_previous_response_id_resolver<F>(mut self, resolver: F) -> Self
+    where
+        F: Fn(&CompletionResponse<M::Response>) -> Option<String> + Send + Sync + 'static,
+    {
+        self.previous_response_id_resolver = Some(Arc::new(resolver));
+        self
+    }
+
+    /// Install a [`SamplingPolicy`] that gates every `prompt.*` and
+    /// `tool.*` emission from this hook. The default policy is
+    /// [`AlwaysSample`](crate::AlwaysSample).
+    ///
+    /// Pairing: the hook passes the resolved conversation id as the
+    /// correlator for `prompt.*` events and the internal call id for
+    /// `tool.*` events. Policies that hash the correlator (such as
+    /// [`RatePolicy`](crate::RatePolicy)) therefore keep
+    /// `tool.invoked` / `tool.completed` pairs coherent
+    /// automatically.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use rig_tap::{RatePolicy, TelemetryHook, TelemetryHookConfig};
+    ///
+    /// # fn make_hook<M: rig::completion::CompletionModel>() -> TelemetryHook<M> {
+    /// TelemetryHook::new(TelemetryHookConfig::new("gpt-4o", "thread-1"))
+    ///     .with_sampling_policy(Arc::new(
+    ///         RatePolicy::new()
+    ///             .with_rate("tool.invoked", 0.1)
+    ///             .with_rate("tool.completed", 0.1),
+    ///     ))
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_sampling_policy(mut self, policy: Arc<dyn SamplingPolicy>) -> Self {
+        self.sampling = policy;
+        self
+    }
+
     fn resolved_conversation_id(&self) -> String {
         self.conversation_id_resolver
             .as_ref()
@@ -151,6 +221,15 @@ impl<M: CompletionModel> TelemetryHook<M> {
             .and_then(|f| f(response))
             .unwrap_or_else(|| self.config.model.clone())
     }
+
+    fn resolved_previous_response_id(
+        &self,
+        response: &CompletionResponse<M::Response>,
+    ) -> Option<String> {
+        self.previous_response_id_resolver
+            .as_ref()
+            .and_then(|f| f(response))
+    }
 }
 
 impl<M: CompletionModel> Clone for TelemetryHook<M> {
@@ -159,6 +238,8 @@ impl<M: CompletionModel> Clone for TelemetryHook<M> {
             config: self.config.clone(),
             conversation_id_resolver: self.conversation_id_resolver.clone(),
             model_resolver: self.model_resolver.clone(),
+            previous_response_id_resolver: self.previous_response_id_resolver.clone(),
+            sampling: self.sampling.clone(),
             _model: PhantomData,
         }
     }
@@ -176,6 +257,11 @@ impl<M: CompletionModel> std::fmt::Debug for TelemetryHook<M> {
                 "model_resolver",
                 &self.model_resolver.as_ref().map(|_| "<fn>"),
             )
+            .field(
+                "previous_response_id_resolver",
+                &self.previous_response_id_resolver.as_ref().map(|_| "<fn>"),
+            )
+            .field("sampling", &self.sampling)
             .finish_non_exhaustive()
     }
 }
@@ -188,13 +274,19 @@ where
         // `messages_in` counts the prompt + prior history that will be sent
         // to the provider.
         let messages_in = history.len().saturating_add(1);
-        emit_kind(
-            self.resolved_conversation_id(),
-            EventKind::PromptStarted {
-                model: self.config.model.clone(),
-                messages_in,
-            },
-        );
+        let conversation_id = self.resolved_conversation_id();
+        if self
+            .sampling
+            .should_sample("prompt.started", &conversation_id)
+        {
+            emit_kind(
+                conversation_id,
+                EventKind::PromptStarted {
+                    model: self.config.model.clone(),
+                    messages_in,
+                },
+            );
+        }
         HookAction::cont()
     }
 
@@ -204,15 +296,22 @@ where
         response: &CompletionResponse<M::Response>,
     ) -> HookAction {
         let usage = response.usage;
-        emit_kind(
-            self.resolved_conversation_id(),
-            EventKind::PromptCompleted {
-                model: self.resolved_model(response),
-                tokens_in: positive(usage.input_tokens),
-                tokens_out: positive(usage.output_tokens),
-                response_id: response.message_id.clone(),
-            },
-        );
+        let conversation_id = self.resolved_conversation_id();
+        if self
+            .sampling
+            .should_sample("prompt.completed", &conversation_id)
+        {
+            emit_kind(
+                conversation_id,
+                EventKind::PromptCompleted {
+                    model: self.resolved_model(response),
+                    tokens_in: positive(usage.input_tokens),
+                    tokens_out: positive(usage.output_tokens),
+                    response_id: response.message_id.clone(),
+                    previous_response_id: self.resolved_previous_response_id(response),
+                },
+            );
+        }
         HookAction::cont()
     }
 
@@ -224,16 +323,21 @@ where
         args: &str,
     ) -> ToolCallHookAction {
         let (args_json, truncated) = truncate_utf8(args, self.config.payload_truncate_bytes);
-        emit_kind(
-            self.resolved_conversation_id(),
-            EventKind::ToolInvoked {
-                tool_name: tool_name.to_string(),
-                provider_call_id: tool_call_id,
-                call_id: internal_call_id.to_string(),
-                args_json,
-                truncated,
-            },
-        );
+        if self
+            .sampling
+            .should_sample("tool.invoked", internal_call_id)
+        {
+            emit_kind(
+                self.resolved_conversation_id(),
+                EventKind::ToolInvoked {
+                    tool_name: tool_name.to_string(),
+                    provider_call_id: tool_call_id,
+                    call_id: internal_call_id.to_string(),
+                    args_json,
+                    truncated,
+                },
+            );
+        }
         ToolCallHookAction::cont()
     }
 
@@ -246,16 +350,21 @@ where
         result: &str,
     ) -> HookAction {
         let (result, truncated) = truncate_utf8(result, self.config.payload_truncate_bytes);
-        emit_kind(
-            self.resolved_conversation_id(),
-            EventKind::ToolCompleted {
-                tool_name: tool_name.to_string(),
-                provider_call_id: tool_call_id,
-                call_id: internal_call_id.to_string(),
-                result,
-                truncated,
-            },
-        );
+        if self
+            .sampling
+            .should_sample("tool.completed", internal_call_id)
+        {
+            emit_kind(
+                self.resolved_conversation_id(),
+                EventKind::ToolCompleted {
+                    tool_name: tool_name.to_string(),
+                    provider_call_id: tool_call_id,
+                    call_id: internal_call_id.to_string(),
+                    result,
+                    truncated,
+                },
+            );
+        }
         HookAction::cont()
     }
 }

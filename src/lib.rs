@@ -63,21 +63,34 @@ mod event;
 mod hook;
 mod observed_memory;
 mod query;
+#[cfg(feature = "openai-responses")]
+pub mod responses_extract;
+#[cfg(all(feature = "openai-responses-websocket", not(target_family = "wasm")))]
+pub mod responses_session;
+mod sampling;
 #[cfg(feature = "subscriber")]
 mod subscriber;
 
 pub use chained::ChainedHook;
 #[cfg(feature = "compose")]
 pub use dispatch::DispatchObserveHook;
-pub use emit::{EVENT_TARGET, build_event, emit, emit_kind, try_emit};
+pub use emit::{EVENT_TARGET, build_event, current_span_id, emit, emit_kind, try_emit};
 pub use error::Error;
 pub use event::{
     EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION, ScalarFields,
     truncate_utf8,
 };
 pub use extract::extract_event;
-pub use hook::{ConversationIdResolver, ModelResolver, TelemetryHook, TelemetryHookConfig};
+pub use hook::{
+    ConversationIdResolver, ModelResolver, PreviousResponseIdResolver, TelemetryHook,
+    TelemetryHookConfig,
+};
 pub use observed_memory::ObservedMemory;
 pub use query::{EventFilter, EventQuery};
+#[cfg(feature = "openai-responses")]
+pub use responses_extract::{HostedToolCall, emit_hosted_tools, extract_hosted_tools};
+#[cfg(all(feature = "openai-responses-websocket", not(target_family = "wasm")))]
+pub use responses_session::{ObservedResponsesSession, ResponsesSessionObserver};
+pub use sampling::{AlwaysSample, RatePolicy, SamplingPolicy};
 #[cfg(feature = "subscriber")]
 pub use subscriber::CapturingLayer;

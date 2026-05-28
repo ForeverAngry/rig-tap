@@ -39,31 +39,79 @@ and what is deliberately out of scope. For day-to-day conventions see
   `compose.retry_attempt`, and `compose.recovery` event kinds establish the
   schema contract for downstream `rig-compose` producer wiring and live
   inspectors.
+- **Schema v1.1 — OpenAI Responses-style stateful endpoints.**
+  `EventKind::PromptCompleted` carries an optional `previous_response_id`;
+  new `tool.hosted_invoked` / `tool.hosted_completed` variants cover
+  provider-native hosted tools (`web_search`, `file_search`,
+  `computer_use`, `code_interpreter`) that bypass `PromptHook::on_tool_call`;
+  new `response.session_started` / `response.turn_started` /
+  `response.turn_completed` / `response.session_ended` variants cover the
+  WebSocket-mode session loop. `ScalarFields` gained `response_id` and
+  `previous_response_id` (now `#[non_exhaustive]` so future additions are
+  non-breaking). `TelemetryHook::with_previous_response_id_resolver`
+  stamps the chain ancestor on `prompt.completed` from caller-tracked
+  state.
+- **`openai-responses` feature — hosted-tool extractor.** New
+  `responses_extract` module with `extract_hosted_tools` /
+  `emit_hosted_tools` / `HostedToolCall`. Walks raw JSON because
+  rig-core's typed `Output` discards hosted-tool payloads via
+  `#[serde(other)]`. Pure-Rust, no extra runtime dependency.
+- **`openai-responses-websocket` feature — `ObservedResponsesSession`
+  decorator + `ResponsesSessionObserver` state machine.** Wraps
+  `rig-core`'s `ResponsesWebSocketSession`, fires
+  `response.session_started` / `response.turn_started` /
+  `response.turn_completed` / `response.session_ended` automatically,
+  and runs `extract_hosted_tools` on every `ResponsesWebSocketDoneEvent`
+  payload. Lazy-finalizes the active turn when callers skip `Done`
+  (the upstream helper returns at the terminal Response chunk), on
+  `close`, or on `into_inner`. Forwards `rig/websocket`; non-WASM only.
+- **OpenAI Responses example + integration tests.**
+  `examples/observe_responses_api.rs` drives a live session through
+  `ObservedResponsesSession` + `CapturingLayer`;
+  `tests/responses_session.rs` covers the multi-turn lifecycle,
+  hosted-tool extraction, the error path, and full schema-v1 JSON
+  round-trip. README has an OpenAI Responses WebSocket section linking
+  to the decorator.
+- **`eval.report` schema variant.** `EventKind::EvalReport` carries a
+  single retrieval metric (`report_id`, `dataset`, `metric`, `value`,
+  optional bootstrap CI bounds, optional baseline diff + verdict,
+  optional `sample_size`). `ScalarFields` gains `dataset` / `metric` /
+  `verdict` columns and `emit` wires matching `rig_tap.*` tracing
+  fields so collectors can filter and aggregate without parsing the
+  envelope. `EventKind::is_eval_related()` classifier rounds out the
+  surface. Producer wiring lives in `rig-retrieval-evals` item #9;
+  this crate just hosts the schema.
+- **OpenTelemetry exporter recipe.** README now documents the stable
+  `rig_tap.*` attribute keys, a minimum-viable OTel Collector pipeline
+  (filter + attributes processors with optional GenAI semconv
+  aliases), and the in-process `tracing-opentelemetry` wiring. Ships
+  with `examples/otel_exporter_recipe.rs` (gated on `subscriber`) that
+  emits one event per major family and prints the exact attribute set
+  an OTel pipeline would receive. No new dependency — the `rig_tap.*`
+  tracing fields are already valid OTel attribute names.
+- **Sampling controls.** `SamplingPolicy` trait + `AlwaysSample`
+  (default) + `RatePolicy` (deterministic, fixed-seed per-kind rate
+  sampler). Wired into `TelemetryHook` via
+  `with_sampling_policy(Arc<dyn SamplingPolicy>)`. The hook passes the
+  resolved conversation id as the correlator for `prompt.*` events and
+  the internal call id for `tool.*` events so `tool.invoked` /
+  `tool.completed` pairs stay coherent. Custom policies (allowlists,
+  error-only, tail-based) implement one trait method.
+- **Span correlation.** `ObservabilityEvent` gains an optional
+  `span_id: Option<u64>` field auto-populated by `build_event` /
+  `emit_kind` from `tracing::Span::current().id()`. Emitted as a
+  `rig_tap.span_id` tracing attribute (with `0` as the absent
+  sentinel) and serialized into the JSON envelope when present.
+  Collectors using `tracing-opentelemetry` (Tempo, Honeycomb) can
+  stitch `rig-tap` events into the existing waterfall without
+  conversation-id post-processing. Additive — no `SCHEMA_VERSION`
+  bump, and `#[serde(default)]` keeps legacy envelopes deserializable.
 
 ## Next Work
 
-1. **Schema v1.1 — additive event fields** — promote frequently-requested
-   fields (e.g. `prompt.input_tokens`, `tool.attempt_index`,
-   `memory.candidate_count`) into the typed envelope so collectors stop
-   pulling them out of the JSON `extra` bag. All additions stay
-   backward-compatible; `version` bumps minor.
-2. **`MetricsEvent` kind for evaluation reports** — wire a new
-   `eval.report` event kind so `rig-retrieval-evals` `MultiReport` / `ReportDiff`
-   summaries (including the new `MetricCi` bootstrap intervals and
-   regression-gate verdicts) ride the same tracing target as runtime
-   telemetry. Coordinated with rig-retrieval-evals item #9.
-3. **OpenTelemetry exporter recipe** — document the minimum viable
-   collector config (attribute mapping from `rig_tap.*` scalars to
-   OTel resource/attribute names) and ship a `no_run` example. No new
-   dep; this is documentation + a doctest.
-4. **Sampling controls** — per-event-kind sampling on `TelemetryHook` so
-   high-volume `tool.*` traffic can be downsampled while keeping
-   `prompt.*` and `memory.*` fully observed. Implement as a
-   `SamplingPolicy` trait with a deterministic default.
-5. **Span correlation** — emit `tracing` span ids on every event so
-   collectors that already correlate by span (Tempo, Honeycomb) can
-   stitch `rig-tap` events into the existing waterfall without
-   conversation-id post-processing.
+_Backlog drained. New items will be added as upstream `rig-core`,
+`rig-compose`, or producer-crate work surfaces fresh observability
+needs._
 
 ## Prototype Grade
 

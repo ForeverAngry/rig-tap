@@ -20,6 +20,67 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::test]
+async fn span_id_is_captured_when_emit_runs_inside_a_span() {
+    let capture = CapturingLayer::new();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let _guard = subscriber.set_default();
+
+    // No active span → span_id should be None.
+    emit_kind(
+        "conv-no-span",
+        EventKind::MemoryDemoted {
+            demoted_count: 0,
+            tags: vec![],
+        },
+    );
+
+    // Active span → span_id should be populated and stable across
+    // emissions within the same span.
+    let span = tracing::info_span!("agent_turn", turn = 1);
+    let (id_first, id_second) = {
+        let _enter = span.enter();
+        emit_kind(
+            "conv-with-span",
+            EventKind::MemoryDemoted {
+                demoted_count: 1,
+                tags: vec![],
+            },
+        );
+        emit_kind(
+            "conv-with-span",
+            EventKind::MemoryDemoted {
+                demoted_count: 2,
+                tags: vec![],
+            },
+        );
+        let snap = capture.snapshot();
+        (snap[1].span_id, snap[2].span_id)
+    };
+
+    let events = capture.snapshot();
+    assert_eq!(events.len(), 3);
+    assert!(
+        events[0].span_id.is_none(),
+        "events emitted outside a span must not carry a span_id"
+    );
+    let inside = id_first.expect("emission inside a span must carry span_id");
+    assert_eq!(
+        Some(inside),
+        id_second,
+        "consecutive emissions in the same span must share span_id"
+    );
+
+    // JSON envelope round-trip preserves the field.
+    let json = serde_json::to_value(&events[1]).unwrap();
+    assert_eq!(json["span_id"], serde_json::json!(inside));
+    let json_no_span = serde_json::to_value(&events[0]).unwrap();
+    assert!(
+        json_no_span.get("span_id").is_none(),
+        "span_id must be skipped when absent (kept JSON envelope clean)"
+    );
+}
+
+#[tokio::test]
 async fn observed_memory_emits_context_sampled() {
     let capture = CapturingLayer::new();
     let subscriber = tracing_subscriber::registry().with(capture.clone());
