@@ -255,6 +255,40 @@ mod tests {
     }
 
     #[test]
+    fn tool_double_terminate_joins_reasons() {
+        let combined = combine_tool_actions(
+            ToolCallHookAction::Terminate {
+                reason: "quota".into(),
+            },
+            ToolCallHookAction::Terminate {
+                reason: "policy".into(),
+            },
+        );
+        match combined {
+            ToolCallHookAction::Terminate { reason } => assert_eq!(reason, "quota | policy"),
+            other => panic!("expected Terminate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_double_skip_joins_reasons() {
+        let combined = combine_tool_actions(
+            ToolCallHookAction::Skip {
+                reason: "duplicate".into(),
+            },
+            ToolCallHookAction::Skip {
+                reason: "low_confidence".into(),
+            },
+        );
+        match combined {
+            ToolCallHookAction::Skip { reason } => {
+                assert_eq!(reason, "duplicate | low_confidence")
+            }
+            other => panic!("expected Skip, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn tool_skip_beats_continue() {
         let combined = combine_tool_actions(
             ToolCallHookAction::Skip {

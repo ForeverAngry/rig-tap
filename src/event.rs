@@ -816,6 +816,16 @@ mod tests {
     }
 
     #[test]
+    fn truncate_boundary_drops_partial_multibyte_codepoint() {
+        let input = format!("{}é", "a".repeat(PAYLOAD_TRUNCATE_BYTES - 1));
+        let (out, truncated) = truncate_utf8(&input, PAYLOAD_TRUNCATE_BYTES);
+        assert!(truncated);
+        assert_eq!(out.len(), PAYLOAD_TRUNCATE_BYTES - 1);
+        assert!(out.ends_with('a'));
+        assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
     fn all_discriminants_round_trip() {
         let kinds = [
             EventKind::PromptStarted {
