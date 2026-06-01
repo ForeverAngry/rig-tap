@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/ForeverAngry/rig-tap/compare/v0.2.1...v0.2.2) - 2026-06-01
+
+### Documentation
+
+- Align README Status block with shipped 0.2.1 ([#11](https://github.com/ForeverAngry/rig-tap/pull/11))
+
+### Fixed
+
+- Keep rate sampling pair coherent ([#13](https://github.com/ForeverAngry/rig-tap/pull/13))
+
 ## [0.2.1](https://github.com/ForeverAngry/rig-tap/compare/v0.2.0...v0.2.1) - 2026-05-28
 
 ### Documentation
