@@ -29,7 +29,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::BuildHasher;
 
 /// Decide whether to emit a given event based on its kind discriminant
 /// and a stable correlator string.
@@ -78,10 +78,10 @@ impl SamplingPolicy for AlwaysSample {
 ///
 /// Sampling is computed by hashing the `correlator` with [`std::hash`]'s
 /// default hasher and comparing the bottom 32 bits, scaled to `[0, 1)`,
-/// against the configured rate. Because the same correlator hashes to
-/// the same bucket, paired emissions (e.g. `tool.invoked` and
-/// `tool.completed` sharing an internal call id) are guaranteed to be
-/// either both kept or both dropped.
+/// against the configured rate. Because event kind is deliberately not part
+/// of the bucket hash, paired emissions (e.g. `tool.invoked` and
+/// `tool.completed` sharing an internal call id) use the same bucket and are
+/// either both kept or both dropped when configured with the same rate.
 #[derive(Debug, Clone)]
 pub struct RatePolicy {
     rates: HashMap<String, f64>,
@@ -143,10 +143,7 @@ impl SamplingPolicy for RatePolicy {
         // `std::hash::RandomState::new()` would randomise the decision
         // across processes; we want determinism per-process *and* per
         // correlator, so we use a fixed seed hasher.
-        let mut hasher = FixedHasher.build_hasher();
-        kind.hash(&mut hasher);
-        correlator.hash(&mut hasher);
-        let bucket = (hasher.finish() as u32) as f64 / (u32::MAX as f64 + 1.0);
+        let bucket = (FixedHasher.hash_one(correlator) as u32) as f64 / (u32::MAX as f64 + 1.0);
         bucket < rate
     }
 }
@@ -204,30 +201,12 @@ mod tests {
         for i in 0..50 {
             let id = format!("call-{i}");
             let invoked = policy.should_sample("tool.invoked", &id);
-            // Same kind + same correlator always agrees with itself.
             assert_eq!(invoked, policy.should_sample("tool.invoked", &id));
-            // Same correlator across paired event names: because the
-            // sample uses (kind, correlator), invoked/completed may
-            // disagree — pair coherence is the *caller's* contract
-            // when they choose the same kind name. Verify the symmetry
-            // we promise: identical (kind, correlator) inputs always
-            // produce identical outputs.
             let completed = policy.should_sample("tool.completed", &id);
-            assert_eq!(completed, policy.should_sample("tool.completed", &id));
-        }
-    }
-
-    #[test]
-    fn rate_pair_coherence_when_same_kind_used_for_both_emissions() {
-        // The TelemetryHook strategy: pass the same kind family + same
-        // correlator on both sides of a pair so the decision is
-        // identical. We model that here.
-        let policy = RatePolicy::new().with_default_rate(0.25);
-        for i in 0..200 {
-            let id = format!("call-{i}");
-            let first = policy.should_sample("tool.invoked", &id);
-            let second = policy.should_sample("tool.invoked", &id);
-            assert_eq!(first, second);
+            assert_eq!(
+                invoked, completed,
+                "tool.invoked/tool.completed must share the same bucket for {id}"
+            );
         }
     }
 
