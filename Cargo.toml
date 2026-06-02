@@ -23,14 +23,14 @@ tracing-subscriber = { version = "0.3", default-features = false, optional = tru
 # Optional bridge to rig-compose's kernel-direct tool dispatch. Pulled
 # only by the `compose` feature so the default build stays free of any
 # rig-compose dependency.
-rig-compose = { version = "0.4", optional = true }
+rig-compose = { version = "0.5", optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.102"
 tokio = { version = "1.51.1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
-rig-compose = "0.4"
+rig-compose = "0.5"
 
 [features]
 default = []
