@@ -250,6 +250,7 @@ pub fn emit_hosted_tools(
                 status,
                 result: result_payload,
                 truncated: result_truncated,
+                duration_ms: None,
             },
         );
     }

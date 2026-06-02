@@ -325,3 +325,85 @@ impl Visit for FieldSnapshot {
         }
     }
 }
+
+#[test]
+fn is_failure_related() {
+    let pf = rig_tap::EventKind::PromptFailed {
+        model: "m".into(),
+        error_class: rig_tap::ErrorClass::RateLimit,
+        message: "rate limit".into(),
+        retriable: true,
+        provider_error_code: None,
+        http_status: Some(429),
+    };
+    assert!(pf.is_failure_related());
+    assert!(pf.is_prompt_related());
+
+    let tf = rig_tap::EventKind::ToolFailed {
+        tool_name: "t".into(),
+        call_id: "c".into(),
+        error_class: rig_tap::ErrorClass::Unknown,
+        message: "boom".into(),
+    };
+    assert!(tf.is_failure_related());
+    assert!(tf.is_tool_related());
+
+    let started = rig_tap::EventKind::PromptStarted {
+        model: "m".into(),
+        messages_in: 1,
+    };
+    assert!(!started.is_failure_related());
+}
+
+#[tokio::test]
+async fn capturing_layer_observes_prompt_and_tool_failures() {
+    use rig_tap::{CapturingLayer, ErrorClass, EventFilter};
+
+    let capture = CapturingLayer::new();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let _guard = subscriber.set_default();
+
+    rig_tap::emit_kind(
+        "conv-fail",
+        rig_tap::EventKind::PromptFailed {
+            model: "m".into(),
+            error_class: ErrorClass::RateLimit,
+            message: "msg".into(),
+            retriable: true,
+            provider_error_code: None,
+            http_status: Some(429),
+        },
+    );
+    rig_tap::emit_kind(
+        "conv-fail",
+        rig_tap::EventKind::ToolFailed {
+            tool_name: "t".into(),
+            call_id: "1".into(),
+            error_class: ErrorClass::Unknown,
+            message: "msg".into(),
+        },
+    );
+
+    let query = capture.query();
+    let events = query.filter(&EventFilter::new().conversation_id("conv-fail"));
+    assert_eq!(events.len(), 2);
+
+    match &events[0].kind {
+        rig_tap::EventKind::PromptFailed {
+            error_class,
+            retriable,
+            ..
+        } => {
+            assert_eq!(*error_class, ErrorClass::RateLimit);
+            assert!(*retriable);
+        }
+        _ => panic!("expected PromptFailed"),
+    }
+
+    match &events[1].kind {
+        rig_tap::EventKind::ToolFailed { error_class, .. } => {
+            assert_eq!(*error_class, ErrorClass::Unknown);
+        }
+        _ => panic!("expected ToolFailed"),
+    }
+}

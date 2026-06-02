@@ -153,8 +153,10 @@ the JSON body.
 |-------------------------|-------------------------------------------------------------|
 | `prompt.started`        | `TelemetryHook::on_completion_call`                         |
 | `prompt.completed`      | `TelemetryHook::on_completion_response`                     |
+| `prompt.failed`         | `TelemetryHook::observe_prompt_error`               |
 | `tool.invoked`          | `TelemetryHook::on_tool_call` / `DispatchObserveHook`       |
 | `tool.completed`        | `TelemetryHook::on_tool_result` / `DispatchObserveHook`     |
+| `tool.failed`           | `TelemetryHook::observe_tool_error`                 |
 | `tool.skipped`          | Producer crate (kernel hook with `Skip` semantics)          |
 | `tool.terminated`       | `DispatchObserveHook` (kernel gate / runtime error)         |
 | `tool.hosted_invoked`   | Producer crate (Responses streaming/WebSocket tap), `responses_extract::emit_hosted_tools`, or `ObservedResponsesSession` |

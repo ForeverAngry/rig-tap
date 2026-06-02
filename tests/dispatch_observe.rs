@@ -53,10 +53,17 @@ async fn observes_invoked_and_completed_for_continue_path() {
 
     match &events[1].kind {
         EventKind::ToolCompleted {
-            tool_name, call_id, ..
+            tool_name,
+            call_id,
+            duration_ms,
+            ..
         } => {
             assert_eq!(tool_name, "echo");
             assert_eq!(call_id, &invoked_call_id, "call_id must pair");
+            assert!(
+                duration_ms.is_some(),
+                "dispatch hook owns both ends so duration_ms must be populated"
+            );
         }
         other => panic!("expected ToolCompleted, got {other:?}"),
     }

@@ -141,6 +141,7 @@ fn multi_turn_session_envelope_is_well_formed() {
             tokens_out,
             hosted_tool_calls,
             session_id,
+            ..
         } => {
             assert_eq!(session_id, "sess-multi");
             assert_eq!(response_id, "resp_1");
@@ -236,5 +237,32 @@ fn error_then_close_emits_failed_turn_and_session_ended() {
     match &events[3].kind {
         EventKind::ResponseSessionEnded { reason, .. } => assert_eq!(reason, "transport_error"),
         other => panic!("expected ResponseSessionEnded, got {other:?}"),
+    }
+}
+
+#[test]
+fn turn_completed_stamps_duration() {
+    let events = capture(|| {
+        let mut observer = ResponsesSessionObserver::new("conv-dur", "gpt-5", "sess-dur");
+        observer.observe_send(None);
+        observer.observe_event(&ResponsesWebSocketEvent::Done(done_event(json!({
+            "id": "resp_1",
+            "status": "completed",
+        }))));
+        observer.observe_close("client_close");
+    });
+
+    let turn = events
+        .iter()
+        .find(|e| e.kind.discriminant() == "response.turn_completed")
+        .expect("turn_completed emitted");
+    match &turn.kind {
+        EventKind::ResponseTurnCompleted { duration_ms, .. } => {
+            assert!(
+                duration_ms.is_some(),
+                "observer owns both ends of the turn so duration_ms must be populated"
+            );
+        }
+        other => panic!("expected ResponseTurnCompleted, got {other:?}"),
     }
 }
