@@ -21,6 +21,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use rig_compose::{
@@ -40,8 +41,10 @@ use crate::event::{EventKind, PAYLOAD_TRUNCATE_BYTES, truncate_utf8};
 /// `call_id`s are synthesized as `dispatch-{instance}-{counter}` where
 /// `instance` is a per-process unique id assigned at construction and
 /// `counter` increments per invocation. The most recent in-flight
-/// `call_id` is held in a `Mutex<Option<String>>`; the kernel guarantees
-/// sequential dispatch, so at most one is pending at a time.
+/// `call_id` is held in a `Mutex<Option<(String, Instant)>>` alongside the
+/// invocation start time; the kernel guarantees sequential dispatch, so at
+/// most one is pending at a time. The start time is used to stamp
+/// `duration_ms` on the paired `tool.completed`.
 ///
 /// # Example
 ///
@@ -70,10 +73,16 @@ pub struct DispatchObserveHook {
     /// Cached kernel id captured on the first lifecycle event so `Drop`
     /// can emit `compose.kernel_shutdown` without re-borrowing the agent.
     kernel_id_cache: Mutex<Option<String>>,
-    in_flight: Mutex<Option<String>>,
+    in_flight: Mutex<Option<(String, Instant)>>,
 }
 
 static INSTANCE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Convert an elapsed [`Instant`] into whole milliseconds, saturating at
+/// [`u64::MAX`] rather than panicking or wrapping on absurdly long spans.
+fn elapsed_millis(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
 impl DispatchObserveHook {
     /// Build a hook stamping events with `conversation_id` and the default
@@ -131,7 +140,7 @@ impl DispatchObserveHook {
         }
     }
 
-    fn take_in_flight(&self) -> Option<String> {
+    fn take_in_flight(&self) -> Option<(String, Instant)> {
         match self.in_flight.lock() {
             Ok(mut guard) => guard.take(),
             Err(poison) => poison.into_inner().take(),
@@ -139,9 +148,10 @@ impl DispatchObserveHook {
     }
 
     fn set_in_flight(&self, call_id: String) {
+        let entry = (call_id, Instant::now());
         match self.in_flight.lock() {
-            Ok(mut guard) => *guard = Some(call_id),
-            Err(poison) => *poison.into_inner() = Some(call_id),
+            Ok(mut guard) => *guard = Some(entry),
+            Err(poison) => *poison.into_inner() = Some(entry),
         }
     }
 
@@ -160,20 +170,20 @@ impl DispatchObserveHook {
         );
     }
 
-    fn call_id_for_after(&self, invocation: &ToolInvocation) -> String {
+    fn call_id_for_after(&self, invocation: &ToolInvocation) -> (String, Option<Instant>) {
         match self.take_in_flight() {
-            Some(call_id) => call_id,
+            Some((call_id, started_at)) => (call_id, Some(started_at)),
             None => {
                 let call_id = self.next_call_id();
                 self.emit_invoked(invocation, &call_id);
-                call_id
+                (call_id, None)
             }
         }
     }
 
     fn call_id_for_error(&self, invocation: &ToolInvocation) -> String {
         match self.take_in_flight() {
-            Some(call_id) => call_id,
+            Some((call_id, _started_at)) => call_id,
             None => {
                 let call_id = self.next_call_id();
                 self.emit_invoked(invocation, &call_id);
@@ -340,7 +350,7 @@ impl ToolDispatchHook for DispatchObserveHook {
         result: &ToolInvocationResult,
         outcome: &ToolInvocationOutcome,
     ) -> Result<(), KernelError> {
-        let call_id = self.call_id_for_after(&result.invocation);
+        let (call_id, started_at) = self.call_id_for_after(&result.invocation);
         match outcome {
             ToolInvocationOutcome::Completed => {
                 let result_raw = serde_json::to_string(&result.output).unwrap_or_default();
@@ -354,6 +364,7 @@ impl ToolDispatchHook for DispatchObserveHook {
                         call_id,
                         result: result_text,
                         truncated,
+                        duration_ms: started_at.map(elapsed_millis),
                     },
                 );
             }

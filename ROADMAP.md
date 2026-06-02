@@ -7,6 +7,9 @@ and what is deliberately out of scope. For day-to-day conventions see
 
 ## Landed
 
+- **M3 — Latency milestones:** Added optional `duration_ms` to `prompt.completed`, `tool.completed`, `tool.hosted_completed`, and `response.turn_completed`, plus `time_to_first_token_ms` to `prompt.completed`. All additive + `skip_serializing_if`.
+- **M2 — Token economics:** Added optional `cached_tokens_in`, `reasoning_tokens`, `cost_usd`, and `finish_reason` to `prompt.completed` schema, drawing directly from rig's `Usage` metrics.
+- **M1 — Failure family:** Added `prompt.failed` and `tool.failed` invariants to `EventKind`, mapped to `TelemetryHook::observe_prompt_error` and `TelemetryHook::observe_tool_error`.
 - `ObservabilityEvent` v1 schema spanning the prompt / tool / context /
   memory lifecycle plus `compose.*` kernel-loop lifecycle events, a stable
   monotonic `tick`, and `conversation_id` correlation.
@@ -184,59 +187,6 @@ milestone is independently shippable, leaves the schema additive, and
 must pass `just check` (fmt + clippy across feature combos + `cargo test
 --all-features`) before it is considered done. Tackle milestones
 top-to-bottom; checklist items inside a milestone can be parallelised.
-
-### M1 — Failure family (Tier 1, highest priority)
-
-Why first: the single largest blind spot; unblocks every error-budget /
-SLO consumer and is a prerequisite for retiring a future `severity` axis.
-
-1. **Schema.** In [src/event.rs](src/event.rs):
-   - Add `pub enum ErrorClass { Timeout, RateLimit, Auth, Transport,
-     Validation, ProviderServer, Cancelled, Unknown }` deriving
-     `Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize`, with
-     `#[serde(rename_all = "snake_case")]` and `#[non_exhaustive]`.
-   - Add `EventKind::PromptFailed { model, error_class, message,
-     retriable: bool, provider_error_code: Option<String>,
-     http_status: Option<u16> }` (`kind = "prompt.failed"`).
-   - Add `EventKind::ToolFailed { tool_name, call_id, error_class,
-     message }` (`kind = "tool.failed"`).
-   - Extend `discriminant()`, `scalar_fields()` (surface `model` /
-     `tool_name` / `call_id`, plus a new `error_class` scalar), and add
-     `EventKind::is_failure_related()` mirroring `is_eval_related()`.
-2. **Scalar wiring.** In [src/event.rs](src/event.rs) add
-   `error_class: &'a str` to `ScalarFields`; in
-   [src/emit.rs](src/emit.rs) add `rig_tap.error_class = fields.error_class`
-   to the `try_emit` macro call.
-3. **Producer.** In [src/hook.rs](src/hook.rs) emit `prompt.failed` /
-   `tool.failed` from the `PromptHook` error surface (map provider errors
-   to `ErrorClass`; conservative `Unknown` fallback). Respect the existing
-   `SamplingPolicy` correlator scheme (conversation id for `prompt.*`,
-   call id for `tool.*`).
-4. **Exports.** Re-export `ErrorClass` from [src/lib.rs](src/lib.rs).
-5. **Tests.** JSON round-trip per variant + an `is_failure_related()`
-   classifier test in [tests/end_to_end.rs](tests/end_to_end.rs); a
-   `CapturingLayer` assertion that a failed prompt/tool emits the new kind.
-6. **Docs.** Add both rows to the README event-kinds table and a one-line
-   note under "Landed" once merged.
-
-### M2 — Token economics + `finish_reason` (Tier 1)
-
-Why second: pure additive fields on an existing variant, no new producer
-logic beyond reading values the response already carries.
-
-1. **Schema.** Add to `EventKind::PromptCompleted` in
-   [src/event.rs](src/event.rs): `cached_tokens_in: Option<u64>`,
-   `reasoning_tokens: Option<u64>`, `cost_usd: Option<f64>`,
-   `finish_reason: Option<String>` — all
-   `#[serde(skip_serializing_if = "Option::is_none", default)]`.
-2. **Producer.** In [src/hook.rs](src/hook.rs) populate from the response
-   where available; leave `None` otherwise. `cost_usd` stays
-   producer-computed (no pricing table in this crate).
-3. **Tests.** Extend the existing `prompt.completed` round-trip to assert
-   the new fields serialize only when present (legacy envelope without
-   them still deserializes).
-4. **Docs.** Note the new optional fields under "Landed"; no table change
-   (same `kind`).
 
 ### M3 — Latency milestones (Tier 1)
 

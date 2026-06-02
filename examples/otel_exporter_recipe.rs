@@ -61,8 +61,14 @@ mod recipe {
                 model: "gpt-5".into(),
                 tokens_in: Some(412),
                 tokens_out: Some(96),
+                cached_tokens_in: Some(128),
+                reasoning_tokens: Some(64),
+                cost_usd: Some(0.0123),
+                finish_reason: Some("stop".into()),
                 response_id: Some("resp_abc".into()),
                 previous_response_id: Some("resp_aaz".into()),
+                time_to_first_token_ms: Some(180),
+                duration_ms: Some(742),
             },
         );
 

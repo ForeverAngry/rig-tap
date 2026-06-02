@@ -77,8 +77,8 @@ pub use dispatch::DispatchObserveHook;
 pub use emit::{EVENT_TARGET, build_event, current_span_id, emit, emit_kind, try_emit};
 pub use error::Error;
 pub use event::{
-    EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION, ScalarFields,
-    truncate_utf8,
+    ErrorClass, EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION,
+    ScalarFields, truncate_utf8,
 };
 pub use extract::extract_event;
 pub use hook::{

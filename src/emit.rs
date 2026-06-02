@@ -90,6 +90,7 @@ pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
         rig_tap.dataset = fields.dataset,
         rig_tap.metric = fields.metric,
         rig_tap.verdict = fields.verdict,
+        rig_tap.error_class = fields.error_class,
     );
     Ok(())
 }

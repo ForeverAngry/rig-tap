@@ -230,6 +230,56 @@ impl<M: CompletionModel> TelemetryHook<M> {
             .as_ref()
             .and_then(|f| f(response))
     }
+
+    /// Observe a failure in the prompt loop. Call this when the agent's
+    /// prompt execution returns an error.
+    pub fn observe_prompt_error(&self, error: &rig::completion::PromptError) {
+        let conversation_id = self.resolved_conversation_id();
+        if !self
+            .sampling
+            .should_sample("prompt.failed", &conversation_id)
+        {
+            return;
+        }
+
+        let (error_class, retriable, provider_error_code, http_status) = map_prompt_error(error);
+
+        crate::emit::emit_kind(
+            conversation_id,
+            crate::event::EventKind::PromptFailed {
+                model: self.config.model.clone(),
+                error_class,
+                message: error.to_string(),
+                retriable,
+                provider_error_code,
+                http_status,
+            },
+        );
+    }
+
+    /// Observe a failure in a tool invocation. Call this when a tool
+    /// returns a failure.
+    pub fn observe_tool_error(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        error: &dyn std::error::Error,
+    ) {
+        let conversation_id = self.resolved_conversation_id();
+        if !self.sampling.should_sample("tool.failed", call_id) {
+            return;
+        }
+
+        crate::emit::emit_kind(
+            conversation_id,
+            crate::event::EventKind::ToolFailed {
+                tool_name: tool_name.to_string(),
+                call_id: call_id.to_string(),
+                error_class: crate::event::ErrorClass::Unknown,
+                message: error.to_string(),
+            },
+        );
+    }
 }
 
 impl<M: CompletionModel> Clone for TelemetryHook<M> {
@@ -307,8 +357,22 @@ where
                     model: self.resolved_model(response),
                     tokens_in: positive(usage.input_tokens),
                     tokens_out: positive(usage.output_tokens),
+                    cached_tokens_in: positive(usage.cached_input_tokens),
+                    reasoning_tokens: positive(usage.reasoning_tokens),
+                    cost_usd: None,
+                    finish_reason: None,
                     response_id: response.message_id.clone(),
                     previous_response_id: self.resolved_previous_response_id(response),
+                    // `time_to_first_token_ms` and `duration_ms` are left unset
+                    // here: the Rig `PromptHook` signature delivers
+                    // `on_completion_call` and `on_completion_response` as two
+                    // separate `&self` invocations on a shared, cloneable hook
+                    // with no per-prompt correlation key, so the hook cannot
+                    // safely own both ends of the pair. Latency is stamped by
+                    // streaming / stateful producers that do — see
+                    // [`crate::responses_session::ResponsesSessionObserver`].
+                    time_to_first_token_ms: None,
+                    duration_ms: None,
                 },
             );
         }
@@ -362,6 +426,12 @@ where
                     call_id: internal_call_id.to_string(),
                     result,
                     truncated,
+                    // Unset here for the same reason as `prompt.completed`:
+                    // the `PromptHook` tool pair spans two `&self` calls on a
+                    // shared hook. The kernel-direct dispatch observer
+                    // ([`crate::DispatchObserveHook`]) owns both ends and does
+                    // stamp `duration_ms`.
+                    duration_ms: None,
                 },
             );
         }
@@ -371,4 +441,52 @@ where
 
 fn positive(value: u64) -> Option<u64> {
     if value == 0 { None } else { Some(value) }
+}
+
+fn map_prompt_error(
+    err: &rig::completion::PromptError,
+) -> (crate::event::ErrorClass, bool, Option<String>, Option<u16>) {
+    match err {
+        rig::completion::PromptError::CompletionError(e) => map_completion_error(e),
+        // A failure indicating the tool itself returned an error or the agent
+        // hallucinates an invalid tool format.
+        rig::completion::PromptError::ToolError(_) => {
+            (crate::event::ErrorClass::Validation, false, None, None)
+        }
+        _ => (crate::event::ErrorClass::Unknown, false, None, None),
+    }
+}
+
+fn map_completion_error(
+    err: &rig::completion::CompletionError,
+) -> (crate::event::ErrorClass, bool, Option<String>, Option<u16>) {
+    use crate::event::ErrorClass;
+    match err {
+        rig::completion::CompletionError::HttpError(http_err) => {
+            let status = match http_err {
+                rig::http_client::Error::InvalidStatusCode(s) => Some(s.as_u16()),
+                rig::http_client::Error::InvalidStatusCodeWithMessage(s, _) => Some(s.as_u16()),
+                _ => None,
+            };
+
+            let (class, retriable) = match status {
+                Some(401 | 403) => (ErrorClass::Auth, false),
+                Some(429) => (ErrorClass::RateLimit, true),
+                Some(400 | 422 | 404) => (ErrorClass::Validation, false),
+                Some(408) => (ErrorClass::Timeout, true),
+                Some(500..=599) => (ErrorClass::ProviderServer, true),
+                _ => (ErrorClass::Transport, true),
+            };
+            (class, retriable, None, status)
+        }
+        rig::completion::CompletionError::JsonError(_)
+        | rig::completion::CompletionError::UrlError(_) => {
+            (ErrorClass::Validation, false, None, None)
+        }
+        rig::completion::CompletionError::ResponseError(_)
+        | rig::completion::CompletionError::ProviderError(_) => {
+            (ErrorClass::ProviderServer, true, None, None)
+        }
+        _ => (ErrorClass::Unknown, false, None, None),
+    }
 }

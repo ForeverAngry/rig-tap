@@ -81,6 +81,7 @@
 //! ```
 
 use std::fmt;
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -117,6 +118,7 @@ pub struct ResponsesSessionObserver {
     turn_tokens_in: Option<u64>,
     turn_tokens_out: Option<u64>,
     turn_hosted_tool_calls: usize,
+    turn_started_at: Option<Instant>,
 }
 
 impl ResponsesSessionObserver {
@@ -147,6 +149,7 @@ impl ResponsesSessionObserver {
             turn_tokens_in: None,
             turn_tokens_out: None,
             turn_hosted_tool_calls: 0,
+            turn_started_at: None,
         }
     }
 
@@ -196,6 +199,7 @@ impl ResponsesSessionObserver {
         self.turn_tokens_in = None;
         self.turn_tokens_out = None;
         self.turn_hosted_tool_calls = 0;
+        self.turn_started_at = Some(Instant::now());
         emit_kind(
             &self.conversation_id,
             EventKind::ResponseTurnStarted {
@@ -325,6 +329,10 @@ impl ResponsesSessionObserver {
             .turn_status
             .clone()
             .unwrap_or_else(|| "completed".to_owned());
+        let duration_ms = self
+            .turn_started_at
+            .take()
+            .map(|started_at| u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX));
         emit_kind(
             &self.conversation_id,
             EventKind::ResponseTurnCompleted {
@@ -335,6 +343,7 @@ impl ResponsesSessionObserver {
                 tokens_in: self.turn_tokens_in,
                 tokens_out: self.turn_tokens_out,
                 hosted_tool_calls: self.turn_hosted_tool_calls,
+                duration_ms,
             },
         );
         self.in_turn = false;
@@ -398,6 +407,7 @@ fn emit_hosted_invoked_completed(
             status,
             result: result_payload,
             truncated: result_truncated,
+            duration_ms: None,
         },
     );
 }

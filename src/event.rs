@@ -103,6 +103,47 @@ pub struct ScalarFields<'a> {
     pub metric: &'a str,
     /// `eval.report` regression-gate verdict.
     pub verdict: &'a str,
+    /// `*.failed` error classification.
+    pub error_class: &'a str,
+}
+
+/// High-level classification of a prompt or tool failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ErrorClass {
+    /// The request exceeded a deadline (connect, read, or overall).
+    Timeout,
+    /// The provider returned a rate-limit / quota signal (e.g. HTTP 429).
+    RateLimit,
+    /// Authentication or authorization failed (e.g. HTTP 401/403).
+    Auth,
+    /// A network/transport-level failure occurred before a usable response.
+    Transport,
+    /// The request was rejected as invalid (e.g. HTTP 400, bad arguments).
+    Validation,
+    /// The provider reported a server-side error (e.g. HTTP 5xx).
+    ProviderServer,
+    /// The operation was cancelled before completion.
+    Cancelled,
+    /// The failure could not be classified into a more specific class.
+    Unknown,
+}
+
+impl ErrorClass {
+    /// Returns the string discriminant.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ErrorClass::Timeout => "timeout",
+            ErrorClass::RateLimit => "rate_limit",
+            ErrorClass::Auth => "auth",
+            ErrorClass::Transport => "transport",
+            ErrorClass::Validation => "validation",
+            ErrorClass::ProviderServer => "provider_server",
+            ErrorClass::Cancelled => "cancelled",
+            ErrorClass::Unknown => "unknown",
+        }
+    }
 }
 
 /// Payload variants. Tagged on the wire as `"kind": "<dotted.name>"`.
@@ -133,6 +174,18 @@ pub enum EventKind {
         /// Provider-reported output tokens, if known.
         #[serde(skip_serializing_if = "Option::is_none")]
         tokens_out: Option<u64>,
+        /// Number of tokens pulled from prefix cache, if reported.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        cached_tokens_in: Option<u64>,
+        /// Number of reasoning (chain-of-thought) tokens generated, if reported.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        reasoning_tokens: Option<u64>,
+        /// Producer-computed USD cost, if available.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        cost_usd: Option<f64>,
+        /// Reason why generation stopped (e.g. "stop", "length", "tool_calls").
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        finish_reason: Option<String>,
         /// Provider response ID, if supplied.
         #[serde(skip_serializing_if = "Option::is_none")]
         response_id: Option<String>,
@@ -143,6 +196,31 @@ pub enum EventKind {
         /// by producer crates emitting the kind directly.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         previous_response_id: Option<String>,
+        /// Time elapsed between call start and the first token yielded, if the producer is streaming.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        time_to_first_token_ms: Option<u64>,
+        /// Total time elapsed for the prompt execution, if the producer tracks it.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+    },
+
+    /// A prompt failed to complete successfully.
+    #[serde(rename = "prompt.failed")]
+    PromptFailed {
+        /// Model name as reported by the provider/system.
+        model: String,
+        /// Classification of the error.
+        error_class: ErrorClass,
+        /// Displayed message or stringified error.
+        message: String,
+        /// Indicates if the failure was deemed retriable.
+        retriable: bool,
+        /// Provider-specific error code if available.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_error_code: Option<String>,
+        /// HTTP status code if the error was a transport or server error.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        http_status: Option<u16>,
     },
     /// A tool is about to be invoked.
     #[serde(rename = "tool.invoked")]
@@ -174,6 +252,21 @@ pub enum EventKind {
         result: String,
         /// `true` if `result` was truncated to [`PAYLOAD_TRUNCATE_BYTES`].
         truncated: bool,
+        /// Total time elapsed for the tool execution, if the producer tracks it.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+    },
+    /// A tool failed to complete its execution.
+    #[serde(rename = "tool.failed")]
+    ToolFailed {
+        /// Tool name (matches the paired `tool.invoked`).
+        tool_name: String,
+        /// Stable internal correlation ID (matches the paired `tool.invoked`).
+        call_id: String,
+        /// High-level classification of the failure.
+        error_class: ErrorClass,
+        /// Displayed message or root error.
+        message: String,
     },
     /// A previously-`ToolInvoked` call was skipped by a gating hook before
     /// the tool body ran. Pairs by `call_id` and closes the
@@ -252,6 +345,9 @@ pub enum EventKind {
         result: String,
         /// `true` if `result` was truncated to [`PAYLOAD_TRUNCATE_BYTES`].
         truncated: bool,
+        /// Total time elapsed for the hosted tool execution, if the producer tracks it.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
     },
     /// The active context was sampled (typically on `ConversationMemory::load`).
     #[serde(rename = "context.sampled")]
@@ -433,6 +529,9 @@ pub enum EventKind {
         /// [`EventKind::ToolHostedInvoked`] / [`EventKind::ToolHostedCompleted`].
         #[serde(skip_serializing_if = "crate::event::is_zero_usize", default)]
         hosted_tool_calls: usize,
+        /// Total time elapsed for the turn execution, if the producer tracks it.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
     },
     /// A stateful provider session closed. Producers emit this on the
     /// underlying close handshake, on a provider `response.failed`, or on
@@ -503,8 +602,10 @@ impl EventKind {
         match self {
             EventKind::PromptStarted { .. } => "prompt.started",
             EventKind::PromptCompleted { .. } => "prompt.completed",
+            EventKind::PromptFailed { .. } => "prompt.failed",
             EventKind::ToolInvoked { .. } => "tool.invoked",
             EventKind::ToolCompleted { .. } => "tool.completed",
+            EventKind::ToolFailed { .. } => "tool.failed",
             EventKind::ToolSkipped { .. } => "tool.skipped",
             EventKind::ToolTerminated { .. } => "tool.terminated",
             EventKind::ToolHostedInvoked { .. } => "tool.hosted_invoked",
@@ -554,6 +655,12 @@ impl EventKind {
                     f.previous_response_id = pid;
                 }
             }
+            EventKind::PromptFailed {
+                model, error_class, ..
+            } => {
+                f.model = model;
+                f.error_class = error_class.as_str();
+            }
             EventKind::ToolInvoked {
                 tool_name, call_id, ..
             }
@@ -562,6 +669,16 @@ impl EventKind {
             } => {
                 f.tool_name = tool_name;
                 f.call_id = call_id;
+            }
+            EventKind::ToolFailed {
+                tool_name,
+                call_id,
+                error_class,
+                ..
+            } => {
+                f.tool_name = tool_name;
+                f.call_id = call_id;
+                f.error_class = error_class.as_str();
             }
             EventKind::ToolSkipped {
                 tool_name, call_id, ..
@@ -661,26 +778,37 @@ impl EventKind {
         f
     }
 
-    /// Returns `true` if the event is part of the prompt lifecycle (`prompt.started`, `prompt.completed`).
+    /// Returns `true` if the event is part of the prompt lifecycle (`prompt.started`, `prompt.completed`, `prompt.failed`).
     pub fn is_prompt_related(&self) -> bool {
         matches!(
             self,
-            EventKind::PromptStarted { .. } | EventKind::PromptCompleted { .. }
+            EventKind::PromptStarted { .. }
+                | EventKind::PromptCompleted { .. }
+                | EventKind::PromptFailed { .. }
         )
     }
 
     /// Returns `true` if the event is part of the tool lifecycle
-    /// (`tool.invoked`, `tool.completed`, `tool.skipped`, `tool.terminated`,
+    /// (`tool.invoked`, `tool.completed`, `tool.failed`, `tool.skipped`, `tool.terminated`,
     /// `tool.hosted_invoked`, `tool.hosted_completed`).
     pub fn is_tool_related(&self) -> bool {
         matches!(
             self,
             EventKind::ToolInvoked { .. }
                 | EventKind::ToolCompleted { .. }
+                | EventKind::ToolFailed { .. }
                 | EventKind::ToolSkipped { .. }
                 | EventKind::ToolTerminated { .. }
                 | EventKind::ToolHostedInvoked { .. }
                 | EventKind::ToolHostedCompleted { .. }
+        )
+    }
+
+    /// Returns `true` if this event indicates a failure in a prompt or tool call.
+    pub fn is_failure_related(&self) -> bool {
+        matches!(
+            self,
+            EventKind::PromptFailed { .. } | EventKind::ToolFailed { .. }
         )
     }
 
@@ -732,6 +860,7 @@ impl EventKind {
         match self {
             EventKind::ToolInvoked { call_id, .. } => Some(call_id),
             EventKind::ToolCompleted { call_id, .. } => Some(call_id),
+            EventKind::ToolFailed { call_id, .. } => Some(call_id),
             EventKind::ToolSkipped { call_id, .. } => Some(call_id),
             EventKind::ToolTerminated { call_id, .. } => Some(call_id),
             EventKind::ToolHostedInvoked { call_id, .. } => Some(call_id),
@@ -799,6 +928,77 @@ mod tests {
     }
 
     #[test]
+    fn optional_latency_and_economics_fields_omitted_when_none() {
+        // When the optional M2/M3 fields are `None`, the serialized
+        // `prompt.completed` payload must stay byte-compatible with the
+        // pre-M2 schema: the new keys are absent, not `null`.
+        let kind = EventKind::PromptCompleted {
+            model: "gpt-4o".into(),
+            tokens_in: Some(10),
+            tokens_out: Some(20),
+            cached_tokens_in: None,
+            reasoning_tokens: None,
+            cost_usd: None,
+            finish_reason: None,
+            response_id: None,
+            previous_response_id: None,
+            time_to_first_token_ms: None,
+            duration_ms: None,
+        };
+
+        let json = serde_json::to_value(&kind).unwrap();
+        let obj = json.as_object().unwrap();
+        for absent in [
+            "cached_tokens_in",
+            "reasoning_tokens",
+            "cost_usd",
+            "finish_reason",
+            "response_id",
+            "previous_response_id",
+            "time_to_first_token_ms",
+            "duration_ms",
+        ] {
+            assert!(
+                !obj.contains_key(absent),
+                "{absent} must be omitted when None"
+            );
+        }
+        assert_eq!(obj["tokens_in"], 10);
+        assert_eq!(obj["tokens_out"], 20);
+
+        let parsed: EventKind = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, kind);
+    }
+
+    #[test]
+    fn optional_latency_and_economics_fields_present_when_set() {
+        let kind = EventKind::PromptCompleted {
+            model: "gpt-4o".into(),
+            tokens_in: Some(10),
+            tokens_out: Some(20),
+            cached_tokens_in: Some(4),
+            reasoning_tokens: Some(8),
+            cost_usd: Some(0.0123),
+            finish_reason: Some("stop".into()),
+            response_id: None,
+            previous_response_id: None,
+            time_to_first_token_ms: Some(180),
+            duration_ms: Some(742),
+        };
+
+        let json = serde_json::to_value(&kind).unwrap();
+        assert_eq!(json["cached_tokens_in"], 4);
+        assert_eq!(json["reasoning_tokens"], 8);
+        assert_eq!(json["cost_usd"], 0.0123);
+        assert_eq!(json["finish_reason"], "stop");
+        assert_eq!(json["time_to_first_token_ms"], 180);
+        assert_eq!(json["duration_ms"], 742);
+
+        let parsed: EventKind = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, kind);
+    }
+
+    #[test]
     fn truncate_at_char_boundary() {
         let s = "café-α-β-γ-δ-ε-ζ-η-θ-ι-κ-λ-μ-ν-ξ-ο-π";
         let (out, truncated) = truncate_utf8(s, 6);
@@ -836,8 +1036,22 @@ mod tests {
                 model: "m".into(),
                 tokens_in: Some(10),
                 tokens_out: Some(20),
+                cached_tokens_in: Some(5),
+                reasoning_tokens: Some(7),
+                cost_usd: Some(0.01),
+                finish_reason: Some("stop".into()),
                 response_id: Some("r".into()),
                 previous_response_id: Some("r_prev".into()),
+                time_to_first_token_ms: Some(120),
+                duration_ms: Some(450),
+            },
+            EventKind::PromptFailed {
+                model: "m".into(),
+                error_class: ErrorClass::Timeout,
+                message: "timed out".into(),
+                retriable: true,
+                provider_error_code: Some("408".into()),
+                http_status: Some(408),
             },
             EventKind::ToolInvoked {
                 tool_name: "t".into(),
@@ -852,6 +1066,13 @@ mod tests {
                 call_id: "c".into(),
                 result: "ok".into(),
                 truncated: false,
+                duration_ms: Some(30),
+            },
+            EventKind::ToolFailed {
+                tool_name: "t".into(),
+                call_id: "c".into(),
+                error_class: ErrorClass::Validation,
+                message: "bad args".into(),
             },
             EventKind::ToolSkipped {
                 tool_name: "t".into(),
@@ -932,6 +1153,7 @@ mod tests {
                 status: Some("completed".into()),
                 result: "".into(),
                 truncated: false,
+                duration_ms: None,
             },
             EventKind::ResponseSessionStarted {
                 model: "gpt-4o".into(),
@@ -949,6 +1171,7 @@ mod tests {
                 tokens_in: Some(10),
                 tokens_out: Some(20),
                 hosted_tool_calls: 2,
+                duration_ms: None,
             },
             EventKind::ResponseSessionEnded {
                 session_id: "sess-1".into(),
@@ -1031,6 +1254,7 @@ mod tests {
             tokens_in: None,
             tokens_out: None,
             hosted_tool_calls: 0,
+            duration_ms: None,
         };
         let fields = evt.scalar_fields();
         assert_eq!(fields.response_id, "resp_1");
@@ -1045,8 +1269,14 @@ mod tests {
                 model: "m".into(),
                 tokens_in: None,
                 tokens_out: None,
+                cached_tokens_in: None,
+                reasoning_tokens: None,
+                cost_usd: None,
+                finish_reason: None,
                 response_id: None,
                 previous_response_id: None,
+                time_to_first_token_ms: None,
+                duration_ms: None,
             },
         );
         let json = serde_json::to_value(&evt).unwrap();
@@ -1066,6 +1296,7 @@ mod tests {
                 tokens_in: None,
                 tokens_out: None,
                 hosted_tool_calls: 0,
+                duration_ms: None,
             },
         );
         let json = serde_json::to_value(&evt).unwrap();

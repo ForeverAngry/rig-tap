@@ -288,6 +288,7 @@ mod tests {
                     call_id: "call-1".into(),
                     result: "ok".into(),
                     truncated: false,
+                    duration_ms: None,
                 },
             ),
             event(
@@ -299,6 +300,7 @@ mod tests {
                     call_id: "call-2".into(),
                     result: "ok".into(),
                     truncated: false,
+                    duration_ms: None,
                 },
             ),
         ]);
