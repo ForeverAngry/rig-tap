@@ -12,6 +12,65 @@ Rig ecosystem the same event vocabulary, whether the event came from a Rig
 agent hook, `rig-compose` dispatch, `rig-memvid` memory behavior, or a host
 application.
 
+## Why rig-tap (vs. what Rig gives you today)
+
+Rig already exposes the raw *callbacks* and *data*: `PromptHook`
+(`on_completion_call` / `on_completion_response` / `on_tool_call` /
+`on_tool_result`), the `Usage` token counts on `CompletionResponse`, typed
+`PromptError` / `CompletionError` values, and GenAI span conventions
+(`gen_ai.usage.input_tokens`, etc.). That is a callback surface scoped to one
+agent loop. It is ephemeral, provider-shaped, and has no on-the-wire form —
+nothing leaves the process, correlates across calls, or speaks a vocabulary
+that other crates share unless you write that glue yourself.
+
+`rig-tap` turns those callbacks into a stable, versioned, queryable telemetry
+contract. What it adds over the raw Rig surface:
+
+- **A versioned wire schema, not just callbacks.** Every event is a flat,
+  `serde`-stable `ObservabilityEvent` envelope (`version`, `tick`,
+  `occurred_at_millis`, `conversation_id`, `span_id`, flattened `kind`).
+  `SCHEMA_VERSION` + `#[non_exhaustive]` make additive evolution a
+  non-breaking contract. Rig's hooks have no wire shape at all.
+- **One vocabulary across the whole ecosystem.** The same `EventKind` covers
+  agent prompts/tools *and* `rig-compose` kernel dispatch, memory/context,
+  eval reports, and stateful provider sessions. `PromptHook` only sees the
+  in-loop agent path — it never fires for kernel-direct dispatch or
+  provider-hosted tools.
+- **OTel-routable scalars without JSON parsing.** Each event surfaces
+  `rig_tap.*` attributes (`model`, `tool_name`, `call_id`, `error_class`,
+  `response_id`, …) as first-class `tracing` fields next to the JSON blob,
+  plus `span_id` mirroring so events stitch into an existing OTel span
+  waterfall. The difference between "I have a callback" and "my collector can
+  index and route on it."
+- **Lifecycle pairing + correlation.** A stable `call_id` pairs
+  `tool.invoked` → `tool.completed` / `failed` / `skipped` / `terminated`, and
+  `previous_response_id` chains stateful turns. Rig hands you two unrelated
+  callbacks; `rig-tap` closes them into spans.
+- **Failure semantics.** `ErrorClass` normalizes provider-shaped errors into a
+  backend-agnostic taxonomy (timeout / rate_limit / auth / transport /
+  validation / provider_server / cancelled / unknown) with a `retriable` flag
+  and HTTP status, so SLOs and alerting build on a uniform shape instead of
+  matching `CompletionError` variants per provider.
+- **Things the hooks structurally can't see.** Provider-*hosted* tools
+  (`web_search`, `file_search`, …) run inside the provider, so `on_tool_call`
+  never fires — `rig-tap` taps the stream/session and emits `tool.hosted_*`.
+  Latency milestones (`duration_ms`, `time_to_first_token_ms`) are measured
+  where a producer owns both ends of a pair. Stateful Responses-WebSocket
+  sessions (`response.session_*` / `response.turn_*`) have no `PromptHook`
+  analog at all.
+- **Operational plumbing.** Pluggable `SamplingPolicy` to downsample hot
+  paths, char-boundary payload truncation, an in-process `EventQuery` layer,
+  and runtime-agnostic emission (no `tokio` dependency).
+
+In one line: Rig gives you callbacks and data scoped to one agent loop;
+`rig-tap` gives you a stable, OTel-routable event contract with a single
+vocabulary spanning agent + compose + memory + sessions + evals, plus failure
+classification, lifecycle correlation, latency, hosted-tool visibility, and
+sampling. If you only need to log one agent's tokens, Rig's hooks are enough;
+the moment you want cross-crate observability you can ship to a collector and
+build SLOs on, that is the gap `rig-tap` fills. It is **additive** — see
+[Coexistence with `rig-core::telemetry`](#coexistence-with-rig-coretelemetry).
+
 ## Emits Uniform Telemetry
 
 `rig-tap` exists to make ecosystem telemetry look the same at the boundary:
