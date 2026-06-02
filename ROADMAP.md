@@ -109,9 +109,190 @@ and what is deliberately out of scope. For day-to-day conventions see
 
 ## Next Work
 
-_Backlog drained. New items will be added as upstream `rig-core`,
-`rig-compose`, or producer-crate work surfaces fresh observability
-needs._
+Guiding principle: `rig-tap`'s value is a **small, stable, actually-emitted**
+vocabulary. The schema already carries producer-only kinds (`compose.*`,
+`eval.report`, `memory.*`) that this crate never fires; piling on more
+speculative variants makes the contract aspirational rather than real.
+The items below are prioritised so that what lands first is what
+`rig-tap`'s own hooks (`TelemetryHook`, `ObservedMemory`) can emit and
+what every analytics / debugging workflow actually needs. All additions
+are additive — new optional fields and new `#[non_exhaustive]` variants,
+no `SCHEMA_VERSION` bump.
+
+### Tier 1 — committed (real blind spots, emittable by this crate)
+
+- **Failure family.** New `prompt.failed` / `tool.failed` kinds plus a
+  stable `ErrorClass` enum (`Timeout | RateLimit | Auth | Transport |
+  Validation | ProviderServer | Cancelled | Unknown`). Today every
+  lifecycle pair models only the happy path and errors disappear into
+  free-text `result` strings, so error-budget / SLO dashboards are
+  impossible without log-grepping. `TelemetryHook` can emit these from
+  the `PromptHook` error surface; producers reuse the same kinds.
+  `ErrorClass::RateLimit` subsumes a dedicated throttle signal — no
+  separate `provider.throttled` kind. Add an `is_failure_related()`
+  classifier mirroring `is_eval_related()`.
+- **Token economics on `prompt.completed`.** Optional additive fields
+  `cached_tokens_in`, `reasoning_tokens`, and producer-computed
+  `cost_usd`. Every current provider (Anthropic prompt caching, OpenAI
+  cached input, o-series / Gemini reasoning tokens) reports these and
+  they are what budgeting and analytics actually key on — more useful
+  than raw `tokens_in` / `tokens_out` alone.
+- **`finish_reason` on `prompt.completed`.** Optional string
+  (`stop | length | tool_calls | content_filter | error`). The single
+  most-filtered field on any LLM dashboard; trivially additive.
+- **Latency milestones.** Optional `duration_ms` on every `*.completed`
+  / `response.turn_completed`, plus `time_to_first_token_ms` on
+  `prompt.completed`. Durations are inferable today by subtracting paired
+  `tick`s, but first-class fields are cheap, standard, and unlock
+  streaming-UX SLOs without consumer-side join logic.
+
+### Tier 2 — planned (structural correlators for agents / debugging)
+
+- **Identity correlators on the envelope.** Optional `agent_id` (promoted
+  to a `rig_tap.*` scalar) so multi-agent `rig-compose` swarms can
+  distinguish actors; optional `trace_id` to pair with the already-shipped
+  `span_id` so log-only consumers can stitch into Tempo / Honeycomb /
+  Datadog without an in-process OTel layer. Both `#[serde(default,
+  skip_serializing_if)]` to keep legacy envelopes deserializable.
+- **`context.persisted` — memory save symmetry.** `ObservedMemory`
+  samples only on `load` today (see Prototype Grade). A
+  `context.persisted { message_count, byte_size }` on `save` closes the
+  loop so consumers no longer need to pair with `TelemetryHook` for the
+  write side.
+
+### Tier 3 — deferred (speculative; gated on a real producer)
+
+Held behind the Reopen Triggers below rather than speculatively baked
+into the contract:
+
+- Embedding / retrieval / rerank pipeline kinds
+  (`embedding.completed`, `retrieval.queried`, `rerank.completed`). These
+  tie offline `eval.report` to live traffic, but should wait until a
+  retrieval producer (`rig-retrieval-evals` or similar) is ready to wire
+  them — otherwise they join the pile of never-emitted variants.
+- A `severity` enum on the envelope — likely redundant once the failure
+  family lands; revisit only if a non-error "warn" signal (partial
+  results, recovered degradation) proves it needs its own axis.
+- Replay metadata on `prompt.started` (`temperature`, `top_p`,
+  `max_tokens`). Useful for repro but raises payload-size and config
+  surface; defer until a concrete debugging workflow asks for it.
+
+## Action Plan
+
+Ordered, dependency-aware execution plan for the work above. Each
+milestone is independently shippable, leaves the schema additive, and
+must pass `just check` (fmt + clippy across feature combos + `cargo test
+--all-features`) before it is considered done. Tackle milestones
+top-to-bottom; checklist items inside a milestone can be parallelised.
+
+### M1 — Failure family (Tier 1, highest priority)
+
+Why first: the single largest blind spot; unblocks every error-budget /
+SLO consumer and is a prerequisite for retiring a future `severity` axis.
+
+1. **Schema.** In [src/event.rs](src/event.rs):
+   - Add `pub enum ErrorClass { Timeout, RateLimit, Auth, Transport,
+     Validation, ProviderServer, Cancelled, Unknown }` deriving
+     `Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize`, with
+     `#[serde(rename_all = "snake_case")]` and `#[non_exhaustive]`.
+   - Add `EventKind::PromptFailed { model, error_class, message,
+     retriable: bool, provider_error_code: Option<String>,
+     http_status: Option<u16> }` (`kind = "prompt.failed"`).
+   - Add `EventKind::ToolFailed { tool_name, call_id, error_class,
+     message }` (`kind = "tool.failed"`).
+   - Extend `discriminant()`, `scalar_fields()` (surface `model` /
+     `tool_name` / `call_id`, plus a new `error_class` scalar), and add
+     `EventKind::is_failure_related()` mirroring `is_eval_related()`.
+2. **Scalar wiring.** In [src/event.rs](src/event.rs) add
+   `error_class: &'a str` to `ScalarFields`; in
+   [src/emit.rs](src/emit.rs) add `rig_tap.error_class = fields.error_class`
+   to the `try_emit` macro call.
+3. **Producer.** In [src/hook.rs](src/hook.rs) emit `prompt.failed` /
+   `tool.failed` from the `PromptHook` error surface (map provider errors
+   to `ErrorClass`; conservative `Unknown` fallback). Respect the existing
+   `SamplingPolicy` correlator scheme (conversation id for `prompt.*`,
+   call id for `tool.*`).
+4. **Exports.** Re-export `ErrorClass` from [src/lib.rs](src/lib.rs).
+5. **Tests.** JSON round-trip per variant + an `is_failure_related()`
+   classifier test in [tests/end_to_end.rs](tests/end_to_end.rs); a
+   `CapturingLayer` assertion that a failed prompt/tool emits the new kind.
+6. **Docs.** Add both rows to the README event-kinds table and a one-line
+   note under "Landed" once merged.
+
+### M2 — Token economics + `finish_reason` (Tier 1)
+
+Why second: pure additive fields on an existing variant, no new producer
+logic beyond reading values the response already carries.
+
+1. **Schema.** Add to `EventKind::PromptCompleted` in
+   [src/event.rs](src/event.rs): `cached_tokens_in: Option<u64>`,
+   `reasoning_tokens: Option<u64>`, `cost_usd: Option<f64>`,
+   `finish_reason: Option<String>` — all
+   `#[serde(skip_serializing_if = "Option::is_none", default)]`.
+2. **Producer.** In [src/hook.rs](src/hook.rs) populate from the response
+   where available; leave `None` otherwise. `cost_usd` stays
+   producer-computed (no pricing table in this crate).
+3. **Tests.** Extend the existing `prompt.completed` round-trip to assert
+   the new fields serialize only when present (legacy envelope without
+   them still deserializes).
+4. **Docs.** Note the new optional fields under "Landed"; no table change
+   (same `kind`).
+
+### M3 — Latency milestones (Tier 1)
+
+Why third: depends on no other milestone but is lower urgency since
+durations are already inferable from `tick`.
+
+1. **Schema.** Add `duration_ms: Option<u64>` to `PromptCompleted`,
+   `ToolCompleted`, `ToolHostedCompleted`, and `ResponseTurnCompleted`;
+   add `time_to_first_token_ms: Option<u64>` to `PromptCompleted`. All
+   optional + `skip_serializing_if`.
+2. **Producer.** Where `TelemetryHook` / `ObservedResponsesSession` own
+   both ends of a pair, measure with `std::time::Instant` and stamp
+   `duration_ms`. Document that `time_to_first_token_ms` is populated only
+   by streaming producers.
+3. **Tests.** Presence-optional round-trip; assert absence keeps the
+   legacy shape byte-compatible.
+
+### M4 — Identity correlators (Tier 2)
+
+Why fourth: envelope change (touches every event), so land after the
+Tier 1 variant work is stable to minimise churn.
+
+1. **Schema.** Add `agent_id: Option<String>` and `trace_id: Option<u64>`
+   to `ObservabilityEvent` in [src/event.rs](src/event.rs), both
+   `#[serde(default, skip_serializing_if = "Option::is_none")]`.
+2. **Plumbing.** Thread an optional `agent_id` through `build_event` /
+   `emit_kind` in [src/emit.rs](src/emit.rs) (new builder method or
+   optional arg; keep the existing signatures working). Resolve `trace_id`
+   the same way `current_span_id()` resolves `span_id`.
+3. **Scalar wiring.** Emit `rig_tap.agent_id` (empty-string sentinel) in
+   `try_emit`; keep `trace_id` JSON-only unless a collector need surfaces.
+4. **Config.** Optional `agent_id` on `TelemetryHookConfig` in
+   [src/hook.rs](src/hook.rs).
+5. **Tests + docs.** Round-trip with and without the fields; README
+   correlation section gains an `agent_id` line.
+
+### M5 — `context.persisted` memory symmetry (Tier 2)
+
+Why last of the committed work: smallest blast radius, closes the
+documented Prototype-Grade `save`-side gap.
+
+1. **Schema.** Add `EventKind::ContextPersisted { message_count,
+   byte_size }` (`kind = "context.persisted"`); extend `discriminant()`
+   and the memory branch of `is_memory_related()`.
+2. **Producer.** Emit from `ObservedMemory::save` in
+   [src/observed_memory.rs](src/observed_memory.rs), mirroring the
+   existing `context.sampled` `load` path.
+3. **Tests + docs.** `CapturingLayer` test asserting `save` emits the kind;
+   README table row; flip the Prototype-Grade `load`-only caveat to
+   "Landed".
+
+### Backlog gate (Tier 3)
+
+Do **not** start `embedding.*` / `retrieval.*` / `rerank.*`, the
+`severity` enum, or replay metadata until a Reopen Trigger fires (see
+below). Revisit at that point and slot into this plan as M6+.
 
 ## Prototype Grade
 
@@ -150,3 +331,7 @@ needs._
 - `rig-compose` synthetic outcomes grow new kinds beyond skip /
   terminate — `DispatchObserveHook` adds matching `tool.*` events
   additively.
+- A retrieval / embedding producer (`rig-retrieval-evals` or similar) is
+  ready to emit live pipeline telemetry — promote the deferred Tier 3
+  `embedding.*` / `retrieval.*` / `rerank.*` kinds into the schema then,
+  not before.
