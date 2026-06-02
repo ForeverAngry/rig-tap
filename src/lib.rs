@@ -17,6 +17,43 @@
 //!
 //! Plus [`ChainedHook`] for composing two `PromptHook`s on a single agent.
 //!
+//! # Why rig-tap (vs. Rig's hooks today)
+//!
+//! Rig already exposes the raw callbacks and data: [`rig::agent::PromptHook`]
+//! (`on_completion_call` / `on_completion_response` / `on_tool_call` /
+//! `on_tool_result`), the `Usage` token counts on `CompletionResponse`, typed
+//! `PromptError` / `CompletionError` values, and GenAI span conventions. That
+//! is a callback surface scoped to one agent loop — ephemeral, provider-shaped,
+//! with no on-the-wire form. Nothing leaves the process, correlates across
+//! calls, or speaks a vocabulary other crates share unless you write that glue.
+//!
+//! `rig-tap` turns those callbacks into a stable, versioned, queryable
+//! telemetry contract:
+//!
+//! - **A versioned wire schema, not just callbacks** — every event is a flat,
+//!   `serde`-stable [`ObservabilityEvent`] envelope. [`SCHEMA_VERSION`] +
+//!   `#[non_exhaustive]` make additive evolution non-breaking.
+//! - **One vocabulary across the ecosystem** — the same [`EventKind`] covers
+//!   agent prompts/tools, `rig-compose` kernel dispatch, memory/context, eval
+//!   reports, and stateful provider sessions. `PromptHook` only sees the
+//!   in-loop agent path.
+//! - **OTel-routable scalars** — each event surfaces [`ScalarFields`] as
+//!   first-class `tracing` attributes (`model`, `tool_name`, `call_id`,
+//!   `error_class`, …) plus `span_id` mirroring, so collectors route without
+//!   parsing JSON.
+//! - **Lifecycle pairing** — a stable `call_id` pairs `tool.invoked` with its
+//!   terminal event; `previous_response_id` chains stateful turns.
+//! - **Failure semantics** — [`ErrorClass`] normalizes provider errors into a
+//!   backend-agnostic taxonomy with a `retriable` flag and HTTP status.
+//! - **Visibility the hooks lack** — provider-hosted tools (`tool.hosted_*`),
+//!   latency milestones (`duration_ms`, `time_to_first_token_ms`), and
+//!   Responses-WebSocket sessions (`response.*`) have no `PromptHook` analog.
+//! - **Operational plumbing** — pluggable [`SamplingPolicy`], payload
+//!   truncation, an in-process [`EventQuery`], runtime-agnostic emission.
+//!
+//! `rig-tap` is **additive** to Rig's GenAI span conventions: its events live
+//! under a separate `tracing` target and can be filtered independently.
+//!
 //! # Wire format
 //!
 //! All events are emitted as a single `tracing::info!` event on the
