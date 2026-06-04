@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/ForeverAngry/rig-tap/compare/v0.2.2...v0.3.0) - 2026-06-04
+
+### Added
+
+- **Failure family (M1)** — new `ErrorClass` enum (8 classes) plus
+  `EventKind::PromptFailed` and `EventKind::ToolFailed` variants.
+  `TelemetryHook` gains `observe_prompt_error` / `observe_tool_error`;
+  prompt errors are classified from HTTP status (429/5xx/408 retriable,
+  401/403/4xx not), tool errors carry the message ([#16](https://github.com/ForeverAngry/rig-tap/pull/16)).
+- **Token economics (M2)** — `prompt.completed` gains optional
+  `cached_tokens_in`, `reasoning_tokens`, `cost_usd`, and
+  `finish_reason`, drawn from rig's `Usage` metrics (`cost_usd` is
+  schema-ready but producer-pending) ([#16](https://github.com/ForeverAngry/rig-tap/pull/16)).
+- **Latency milestones (M3)** — optional `duration_ms` on
+  `prompt.completed`, `tool.completed`, `tool.hosted_completed`, and
+  `response.turn_completed`, plus `time_to_first_token_ms` on
+  `prompt.completed`. Populated where a producer owns both ends of the
+  pair (`DispatchObserveHook`, `ResponsesSessionObserver`) ([#16](https://github.com/ForeverAngry/rig-tap/pull/16)).
+
+### Changed
+
+- **[breaking]** Added enum variants and exhaustive struct-variant fields
+  to `EventKind`. The new fields all use `skip_serializing_if` so the v1
+  JSON wire format stays byte-compatible, but downstream `match` arms and
+  struct literals over `EventKind` must be updated ([#16](https://github.com/ForeverAngry/rig-tap/pull/16)).
+- Bump `rig-compose` to 0.5 (`compose` feature).
+
+### Documentation
+
+- Explain why rig-tap exists and its delta over Rig's hooks ([#17](https://github.com/ForeverAngry/rig-tap/pull/17))
+- Update roadmap with prioritized work tiers and action plan
+
 ## [0.2.2](https://github.com/ForeverAngry/rig-tap/compare/v0.2.1...v0.2.2) - 2026-06-01
 
 ### Documentation
