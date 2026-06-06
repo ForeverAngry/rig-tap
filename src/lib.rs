@@ -98,6 +98,7 @@ pub mod emit;
 mod error;
 mod event;
 mod hook;
+mod insights;
 mod observed_memory;
 mod query;
 #[cfg(feature = "openai-responses")]
@@ -121,6 +122,9 @@ pub use extract::extract_event;
 pub use hook::{
     ConversationIdResolver, ModelResolver, PreviousResponseIdResolver, TelemetryHook,
     TelemetryHookConfig,
+};
+pub use insights::{
+    Insights, LatencySummary, PromptStats, TokenTotals, ToolOutcome, ToolSpan, ToolStats,
 };
 pub use observed_memory::ObservedMemory;
 pub use query::{EventFilter, EventQuery};
