@@ -14,7 +14,8 @@ use crate::emit::emit_kind;
 use crate::event::EventKind;
 
 /// Wraps any [`ConversationMemory`] and emits a `context.sampled` event on
-/// every `load`. `append` and `clear` pass through unchanged.
+/// every `load` and a `context.persisted` event on every `append`. `clear`
+/// passes through unchanged.
 ///
 /// # Example
 ///
@@ -98,7 +99,19 @@ where
         conversation_id: &'a str,
         messages: Vec<Message>,
     ) -> WasmBoxedFuture<'a, Result<(), MemoryError>> {
-        self.inner.append(conversation_id, messages)
+        Box::pin(async move {
+            let message_count = messages.len();
+            let byte_size = approx_json_size(&messages);
+            self.inner.append(conversation_id, messages).await?;
+            emit_kind(
+                conversation_id,
+                EventKind::ContextPersisted {
+                    message_count,
+                    byte_size,
+                },
+            );
+            Ok(())
+        })
     }
 
     fn clear<'a>(

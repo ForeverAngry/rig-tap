@@ -7,6 +7,8 @@ and what is deliberately out of scope. For day-to-day conventions see
 
 ## Landed
 
+- **M5 — `context.persisted` memory symmetry:** New `EventKind::ContextPersisted { message_count, byte_size }` (`kind = "context.persisted"`), emitted from `ObservedMemory::append`, mirroring the `context.sampled` read-side path. Additive; classified by `is_memory_related()`.
+- **M4 — Identity correlators:** Added optional `agent_id: Option<String>` and `trace_id: Option<u64>` to the `ObservabilityEvent` envelope (both `#[serde(default, skip_serializing_if)]`). `build_event_with` / `emit_kind_with` thread them through; `agent_id` is promoted to the `rig_tap.agent_id` scalar (empty-string sentinel) while `trace_id` stays JSON-only. `TelemetryHookConfig::agent_id` + `TelemetryHook::with_agent_id` stamp every hook-emitted event. No `SCHEMA_VERSION` bump.
 - **M3 — Latency milestones:** Added optional `duration_ms` to `prompt.completed`, `tool.completed`, `tool.hosted_completed`, and `response.turn_completed`, plus `time_to_first_token_ms` to `prompt.completed`. All additive + `skip_serializing_if`.
 - **M2 — Token economics:** Added optional `cached_tokens_in`, `reasoning_tokens`, `cost_usd`, and `finish_reason` to `prompt.completed` schema, drawing directly from rig's `Usage` metrics.
 - **M1 — Failure family:** Added `prompt.failed` and `tool.failed` invariants to `EventKind`, mapped to `TelemetryHook::observe_prompt_error` and `TelemetryHook::observe_tool_error`.
@@ -149,19 +151,19 @@ no `SCHEMA_VERSION` bump.
   `tick`s, but first-class fields are cheap, standard, and unlock
   streaming-UX SLOs without consumer-side join logic.
 
-### Tier 2 — planned (structural correlators for agents / debugging)
+### Tier 2 — landed (structural correlators for agents / debugging)
 
-- **Identity correlators on the envelope.** Optional `agent_id` (promoted
-  to a `rig_tap.*` scalar) so multi-agent `rig-compose` swarms can
-  distinguish actors; optional `trace_id` to pair with the already-shipped
-  `span_id` so log-only consumers can stitch into Tempo / Honeycomb /
-  Datadog without an in-process OTel layer. Both `#[serde(default,
-  skip_serializing_if)]` to keep legacy envelopes deserializable.
-- **`context.persisted` — memory save symmetry.** `ObservedMemory`
-  samples only on `load` today (see Prototype Grade). A
-  `context.persisted { message_count, byte_size }` on `save` closes the
-  loop so consumers no longer need to pair with `TelemetryHook` for the
-  write side.
+- **Identity correlators on the envelope.** ✅ Landed (M4). Optional
+  `agent_id` (promoted to the `rig_tap.agent_id` scalar) so multi-agent
+  `rig-compose` swarms can distinguish actors; optional `trace_id` to pair
+  with the already-shipped `span_id` so log-only consumers can stitch into
+  Tempo / Honeycomb / Datadog without an in-process OTel layer. Both
+  `#[serde(default, skip_serializing_if)]` to keep legacy envelopes
+  deserializable.
+- **`context.persisted` — memory save symmetry.** ✅ Landed (M5).
+  `ObservedMemory` now emits `context.persisted { message_count,
+  byte_size }` on `append`, closing the loop so consumers no longer need
+  to pair with `TelemetryHook` for the write side.
 
 ### Tier 3 — deferred (speculative; gated on a real producer)
 
@@ -249,9 +251,9 @@ below). Revisit at that point and slot into this plan as M6+.
 - The JSON envelope is canonical; consumers parsing only the scalar
   `rig_tap.*` fields will see a strict subset. Anything not promoted to
   a scalar in a given release is still inside `event` as JSON.
-- `ObservedMemory` samples context size on `load`. It does not yet
-  sample on `save`; downstream consumers that need both sides should
-  pair it with `TelemetryHook` until the memory-save event lands.
+- `ObservedMemory` samples context size on `load` (`context.sampled`)
+  and on `append` (`context.persisted`), covering both the read and write
+  sides of a conversation's history.
 - `ChainedHook` is the documented composition primitive. Layering more
   than two hooks today works but is verbose — a variadic builder is on
   the v1.1 list above only if the variadic ergonomics turn out to

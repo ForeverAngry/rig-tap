@@ -264,6 +264,8 @@ mod tests {
             tick,
             conversation_id: conversation_id.into(),
             span_id: None,
+            agent_id: None,
+            trace_id: None,
             kind,
         }
     }

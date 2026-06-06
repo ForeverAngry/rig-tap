@@ -113,6 +113,37 @@ async fn observed_memory_emits_context_sampled() {
 }
 
 #[tokio::test]
+async fn observed_memory_emits_context_persisted_on_append() {
+    let capture = CapturingLayer::new();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let _guard = subscriber.set_default();
+
+    let memory = ObservedMemory::new(InMemoryConversationMemory::new());
+
+    memory
+        .append("thread-y", vec![rig::completion::Message::user("hello")])
+        .await
+        .unwrap();
+
+    let persisted = capture
+        .query()
+        .filter(&EventFilter::new().kind("context.persisted"));
+    assert_eq!(persisted.len(), 1);
+    let evt = &persisted[0];
+    assert_eq!(evt.conversation_id, "thread-y");
+    match &evt.kind {
+        EventKind::ContextPersisted {
+            message_count,
+            byte_size,
+        } => {
+            assert_eq!(*message_count, 1);
+            assert!(*byte_size > 2);
+        }
+        other => panic!("expected ContextPersisted, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn emit_kind_writes_full_envelope() {
     let capture = CapturingLayer::new();
     let subscriber = tracing_subscriber::registry().with(capture.clone());

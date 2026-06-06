@@ -112,7 +112,10 @@ mod subscriber;
 pub use chained::ChainedHook;
 #[cfg(feature = "compose")]
 pub use dispatch::DispatchObserveHook;
-pub use emit::{EVENT_TARGET, build_event, current_span_id, emit, emit_kind, try_emit};
+pub use emit::{
+    EVENT_TARGET, build_event, build_event_with, current_span_id, emit, emit_kind, emit_kind_with,
+    try_emit,
+};
 pub use error::Error;
 pub use event::{
     ErrorClass, EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION,

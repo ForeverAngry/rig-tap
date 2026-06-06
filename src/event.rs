@@ -46,6 +46,22 @@ pub struct ObservabilityEvent {
     /// when no span is active at emit time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub span_id: Option<u64>,
+    /// Logical agent / actor identifier, when the producer runs more than
+    /// one agent and needs to distinguish actors (e.g. a `rig-compose`
+    /// swarm). Promoted to the `rig_tap.agent_id` scalar so collectors can
+    /// group by actor without parsing the JSON envelope. Absent for
+    /// single-agent producers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Distributed-trace identifier the producer is participating in, when
+    /// known. Pairs with [`span_id`](Self::span_id) so log-only consumers
+    /// can stitch `rig-tap` events into a Tempo / Honeycomb / Datadog trace
+    /// without an in-process OpenTelemetry layer. Kept JSON-only (not a
+    /// scalar) because most collectors derive the trace id from span
+    /// context. Absent unless a producer stamps it explicitly via
+    /// [`crate::emit::build_event_with`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<u64>,
     /// Event-specific payload. Flattened into the parent object.
     #[serde(flatten)]
     pub kind: EventKind,
@@ -62,6 +78,8 @@ impl ObservabilityEvent {
             tick: 0,
             conversation_id: conversation_id.into(),
             span_id: None,
+            agent_id: None,
+            trace_id: None,
             kind,
         }
     }
@@ -361,6 +379,18 @@ pub enum EventKind {
         #[serde(skip_serializing_if = "Option::is_none")]
         token_estimate: Option<u64>,
     },
+    /// The active context was persisted (typically on the write side of a
+    /// [`ConversationMemory`](rig::memory::ConversationMemory), i.e. an
+    /// `append`). Mirrors [`EventKind::ContextSampled`] so consumers can
+    /// observe both the read and write sides of a conversation's history
+    /// without pairing against a separate `prompt.*` event.
+    #[serde(rename = "context.persisted")]
+    ContextPersisted {
+        /// Number of messages written in this persist call.
+        message_count: usize,
+        /// JSON byte size of the written messages (rough size estimate).
+        byte_size: usize,
+    },
     /// A compactor fired, replacing some evicted history with a summary
     /// artifact.
     #[serde(rename = "context.compacted")]
@@ -611,6 +641,7 @@ impl EventKind {
             EventKind::ToolHostedInvoked { .. } => "tool.hosted_invoked",
             EventKind::ToolHostedCompleted { .. } => "tool.hosted_completed",
             EventKind::ContextSampled { .. } => "context.sampled",
+            EventKind::ContextPersisted { .. } => "context.persisted",
             EventKind::ContextCompacted { .. } => "context.compacted",
             EventKind::MemoryDemoted { .. } => "memory.demoted",
             EventKind::MemoryFrameWritten { .. } => "memory.frame_written",
@@ -771,6 +802,7 @@ impl EventKind {
                 }
             }
             EventKind::ContextSampled { .. }
+            | EventKind::ContextPersisted { .. }
             | EventKind::ContextCompacted { .. }
             | EventKind::MemoryDemoted { .. }
             | EventKind::MemoryFrameWritten { .. } => {}
@@ -830,6 +862,7 @@ impl EventKind {
         matches!(
             self,
             EventKind::ContextSampled { .. }
+                | EventKind::ContextPersisted { .. }
                 | EventKind::ContextCompacted { .. }
                 | EventKind::MemoryDemoted { .. }
                 | EventKind::MemoryFrameWritten { .. }
@@ -909,6 +942,8 @@ mod tests {
             tick: 42,
             conversation_id: "thread-1".into(),
             span_id: None,
+            agent_id: None,
+            trace_id: None,
             kind: EventKind::PromptStarted {
                 model: "gpt-4o".into(),
                 messages_in: 3,
@@ -921,8 +956,38 @@ mod tests {
         assert_eq!(json["messages_in"], 3);
         assert_eq!(json["tick"], 42);
         assert_eq!(json["version"], SCHEMA_VERSION);
+        // Absent envelope correlators must not serialize as `null` keys.
+        let obj = json.as_object().unwrap();
+        assert!(!obj.contains_key("span_id"));
+        assert!(!obj.contains_key("agent_id"));
+        assert!(!obj.contains_key("trace_id"));
 
         // Round-trip.
+        let parsed: ObservabilityEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, event);
+    }
+
+    #[test]
+    fn envelope_carries_agent_and_trace_correlators() {
+        let event = ObservabilityEvent {
+            version: SCHEMA_VERSION,
+            occurred_at_millis: 1715000000000,
+            tick: 7,
+            conversation_id: "thread-1".into(),
+            span_id: Some(99),
+            agent_id: Some("planner".into()),
+            trace_id: Some(0xABCD),
+            kind: EventKind::PromptStarted {
+                model: "gpt-4o".into(),
+                messages_in: 1,
+            },
+        };
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["agent_id"], "planner");
+        assert_eq!(json["trace_id"], 0xABCD);
+        assert_eq!(json["span_id"], 99);
+
         let parsed: ObservabilityEvent = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, event);
     }

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use rig::agent::{HookAction, PromptHook, ToolCallHookAction};
 use rig::completion::{CompletionModel, CompletionResponse, Message};
 
-use crate::emit::emit_kind;
+use crate::emit::emit_kind_with;
 use crate::event::{EventKind, PAYLOAD_TRUNCATE_BYTES, truncate_utf8};
 use crate::sampling::{AlwaysSample, SamplingPolicy};
 
@@ -64,6 +64,11 @@ pub struct TelemetryHookConfig {
     /// Default conversation ID stamped on every emitted event when no
     /// per-request resolver is registered or the resolver returns `None`.
     pub conversation_id: String,
+    /// Optional logical agent / actor identifier stamped on every emitted
+    /// event's [`agent_id`](crate::ObservabilityEvent::agent_id) field.
+    /// Set it when one process runs more than one agent and you want to
+    /// group telemetry by actor. `None` leaves the field unset.
+    pub agent_id: Option<String>,
     /// Maximum byte length of inline `args_json` / `result` payloads before
     /// truncation. Defaults to [`PAYLOAD_TRUNCATE_BYTES`].
     pub payload_truncate_bytes: usize,
@@ -76,6 +81,7 @@ impl TelemetryHookConfig {
         Self {
             model: model.into(),
             conversation_id: conversation_id.into(),
+            agent_id: None,
             payload_truncate_bytes: PAYLOAD_TRUNCATE_BYTES,
         }
     }
@@ -208,6 +214,21 @@ impl<M: CompletionModel> TelemetryHook<M> {
         self
     }
 
+    /// Stamp `agent_id` on the [`agent_id`](crate::ObservabilityEvent::agent_id)
+    /// field of every event this hook emits. Use it to distinguish actors when
+    /// one process runs more than one agent.
+    #[must_use]
+    pub fn with_agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.config.agent_id = Some(agent_id.into());
+        self
+    }
+
+    /// Build + emit `kind` for `conversation_id`, stamping the configured
+    /// [`agent_id`](TelemetryHookConfig::agent_id).
+    fn emit_event(&self, conversation_id: String, kind: EventKind) {
+        emit_kind_with(conversation_id, kind, self.config.agent_id.clone(), None);
+    }
+
     fn resolved_conversation_id(&self) -> String {
         self.conversation_id_resolver
             .as_ref()
@@ -244,7 +265,7 @@ impl<M: CompletionModel> TelemetryHook<M> {
 
         let (error_class, retriable, provider_error_code, http_status) = map_prompt_error(error);
 
-        crate::emit::emit_kind(
+        self.emit_event(
             conversation_id,
             crate::event::EventKind::PromptFailed {
                 model: self.config.model.clone(),
@@ -270,7 +291,7 @@ impl<M: CompletionModel> TelemetryHook<M> {
             return;
         }
 
-        crate::emit::emit_kind(
+        self.emit_event(
             conversation_id,
             crate::event::EventKind::ToolFailed {
                 tool_name: tool_name.to_string(),
@@ -329,7 +350,7 @@ where
             .sampling
             .should_sample("prompt.started", &conversation_id)
         {
-            emit_kind(
+            self.emit_event(
                 conversation_id,
                 EventKind::PromptStarted {
                     model: self.config.model.clone(),
@@ -351,7 +372,7 @@ where
             .sampling
             .should_sample("prompt.completed", &conversation_id)
         {
-            emit_kind(
+            self.emit_event(
                 conversation_id,
                 EventKind::PromptCompleted {
                     model: self.resolved_model(response),
@@ -391,7 +412,7 @@ where
             .sampling
             .should_sample("tool.invoked", internal_call_id)
         {
-            emit_kind(
+            self.emit_event(
                 self.resolved_conversation_id(),
                 EventKind::ToolInvoked {
                     tool_name: tool_name.to_string(),
@@ -418,7 +439,7 @@ where
             .sampling
             .should_sample("tool.completed", internal_call_id)
         {
-            emit_kind(
+            self.emit_event(
                 self.resolved_conversation_id(),
                 EventKind::ToolCompleted {
                     tool_name: tool_name.to_string(),
