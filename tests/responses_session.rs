@@ -20,7 +20,9 @@ use rig::providers::openai::responses_api::streaming::ResponseChunk;
 use rig::providers::openai::responses_api::websocket::{
     ResponsesWebSocketDoneEvent, ResponsesWebSocketEvent,
 };
-use rig_tap::{CapturingLayer, EventKind, ResponsesSessionObserver, SCHEMA_VERSION};
+use rig_tap::{
+    CapturingLayer, EventKind, RedactionPolicy, ResponsesSessionObserver, SCHEMA_VERSION,
+};
 use serde_json::{Value, json};
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -264,5 +266,92 @@ fn turn_completed_stamps_duration() {
             );
         }
         other => panic!("expected ResponseTurnCompleted, got {other:?}"),
+    }
+}
+
+/// Masks a known secret token that appears inside hosted-tool payloads.
+#[derive(Debug)]
+struct HostedScrubber;
+
+impl RedactionPolicy for HostedScrubber {
+    fn redact_tool_args<'a>(
+        &self,
+        _tool_name: &str,
+        args_json: &'a str,
+    ) -> std::borrow::Cow<'a, str> {
+        if args_json.contains("sk-live-SECRET") {
+            std::borrow::Cow::Owned(args_json.replace("sk-live-SECRET", "[REDACTED]"))
+        } else {
+            std::borrow::Cow::Borrowed(args_json)
+        }
+    }
+
+    fn redact_tool_result<'a>(
+        &self,
+        _tool_name: &str,
+        result: &'a str,
+    ) -> std::borrow::Cow<'a, str> {
+        if result.contains("sk-live-SECRET") {
+            std::borrow::Cow::Owned(result.replace("sk-live-SECRET", "[REDACTED]"))
+        } else {
+            std::borrow::Cow::Borrowed(result)
+        }
+    }
+}
+
+#[test]
+fn hosted_tool_redaction_scrubs_invoked_and_completed() {
+    let events = capture(|| {
+        let mut observer = ResponsesSessionObserver::new("conv-redact", "gpt-5", "sess-redact")
+            .with_redaction_policy(std::sync::Arc::new(HostedScrubber));
+
+        observer.observe_send(None);
+        // A web_search hosted call whose query (args) and results both carry
+        // a secret the provider echoed back.
+        observer.observe_event(&ResponsesWebSocketEvent::Done(done_event(json!({
+            "id": "resp_1",
+            "status": "completed",
+            "usage": { "input_tokens": 1, "output_tokens": 1 },
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": { "queries": ["lookup sk-live-SECRET token"] },
+                    "results": [ { "url": "https://api.example.com?key=sk-live-SECRET" } ]
+                }
+            ],
+        }))));
+        observer.observe_close("client_close");
+    });
+
+    let invoked = events
+        .iter()
+        .find(|e| e.kind.discriminant() == "tool.hosted_invoked")
+        .expect("tool.hosted_invoked emitted");
+    match &invoked.kind {
+        EventKind::ToolHostedInvoked { args_json, .. } => {
+            assert!(
+                !args_json.contains("sk-live-SECRET"),
+                "hosted args secret leaked: {args_json}"
+            );
+            assert!(args_json.contains("[REDACTED]"));
+        }
+        other => panic!("expected ToolHostedInvoked, got {other:?}"),
+    }
+
+    let completed = events
+        .iter()
+        .find(|e| e.kind.discriminant() == "tool.hosted_completed")
+        .expect("tool.hosted_completed emitted");
+    match &completed.kind {
+        EventKind::ToolHostedCompleted { result, .. } => {
+            assert!(
+                !result.contains("sk-live-SECRET"),
+                "hosted result secret leaked: {result}"
+            );
+            assert!(result.contains("[REDACTED]"));
+        }
+        other => panic!("expected ToolHostedCompleted, got {other:?}"),
     }
 }

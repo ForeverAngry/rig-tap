@@ -69,33 +69,64 @@ impl SamplingPolicy for AlwaysSample {
 }
 
 /// A policy that wraps an underlying downsampler but guarantees that critical
-/// paths like failures, retries, and high-latency anomalies always bypass the
-/// drop rate and get emitted 100% of the time.
+/// error and recovery paths always bypass the drop rate and get emitted 100%
+/// of the time.
 ///
 /// This provides simple "Adaptive Sampling" or "Tail-based Sampling" so you
 /// can run a busy swarm at `0.01` rate for happy paths but capture `1.0` of
-/// any errors or recoveries.
+/// any failures or recoveries.
+///
+/// The always-keep set is a deliberate allowlist of *anomaly* kinds, not a
+/// broad suffix match. It covers genuine failures and recovery signals:
+///
+/// - `prompt.failed`, `tool.failed`, `tool.hosted_completed` is **not**
+///   included (it is a success terminal);
+/// - `tool.terminated` — a hook aborted the agent loop;
+/// - `compose.recovery`, `compose.retry_attempt`.
+///
+/// `tool.skipped` is intentionally **not** retained: a gate choosing not to
+/// run a tool is a routine control-flow decision, not an anomaly, and keeping
+/// 100% of skips would flood a sampled stream with non-error volume. Callers
+/// who want additional kinds always kept can list them via
+/// [`AdaptiveErrorPolicy::also_keep`].
 #[derive(Debug, Clone)]
 pub struct AdaptiveErrorPolicy<P: SamplingPolicy> {
     inner: P,
+    extra_keep: Vec<String>,
 }
+
+/// Event kinds the [`AdaptiveErrorPolicy`] always keeps regardless of the
+/// inner policy's drop rate.
+const ALWAYS_KEEP_KINDS: &[&str] = &[
+    "prompt.failed",
+    "tool.failed",
+    "tool.terminated",
+    "compose.recovery",
+    "compose.retry_attempt",
+];
 
 impl<P: SamplingPolicy> AdaptiveErrorPolicy<P> {
     /// Wrap an existing policy (like [`RatePolicy`]) with error-bypassing logic.
     pub fn new(inner: P) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            extra_keep: Vec::new(),
+        }
+    }
+
+    /// Add an extra event-kind discriminant to the always-keep allowlist
+    /// (e.g. `"tool.skipped"` if your deployment treats skips as signal).
+    #[must_use]
+    pub fn also_keep(mut self, kind: impl Into<String>) -> Self {
+        self.extra_keep.push(kind.into());
+        self
     }
 }
 
 impl<P: SamplingPolicy> SamplingPolicy for AdaptiveErrorPolicy<P> {
     fn should_sample(&self, kind: &str, correlator: &str) -> bool {
-        // Automatically retain all negative paths and recoveries
-        if kind.ends_with(".failed")
-            || kind.ends_with(".terminated")
-            || kind.ends_with(".skipped")
-            || kind == "compose.recovery"
-            || kind == "compose.retry_attempt"
-        {
+        // Deterministically retain genuine failure / recovery anomalies.
+        if ALWAYS_KEEP_KINDS.contains(&kind) || self.extra_keep.iter().any(|extra| extra == kind) {
             return true;
         }
 

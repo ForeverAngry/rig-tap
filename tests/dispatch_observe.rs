@@ -19,7 +19,7 @@ use rig_compose::{
     SkillRegistry, ToolDispatchAction, ToolDispatchHook, ToolInvocation, ToolRegistry, ToolSchema,
     dispatch_tool_invocations_with_hooks,
 };
-use rig_tap::{CapturingLayer, DispatchObserveHook, EventKind};
+use rig_tap::{CapturingLayer, DispatchObserveHook, EventFilter, EventKind, RedactionPolicy};
 use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -353,6 +353,83 @@ async fn observes_generic_agent_lifecycle_events() {
             assert_eq!(reason, "normal");
         }
         other => panic!("expected ComposeKernelShutdown, got {other:?}"),
+    }
+}
+
+/// A scrubber that masks a known secret in both args and results.
+#[derive(Debug)]
+struct DispatchScrubber;
+
+impl RedactionPolicy for DispatchScrubber {
+    fn redact_tool_args<'a>(
+        &self,
+        _tool_name: &str,
+        args_json: &'a str,
+    ) -> std::borrow::Cow<'a, str> {
+        if args_json.contains("hunter2") {
+            std::borrow::Cow::Owned(args_json.replace("hunter2", "[REDACTED]"))
+        } else {
+            std::borrow::Cow::Borrowed(args_json)
+        }
+    }
+
+    fn redact_tool_result<'a>(
+        &self,
+        _tool_name: &str,
+        result: &'a str,
+    ) -> std::borrow::Cow<'a, str> {
+        if result.contains("hunter2") {
+            std::borrow::Cow::Owned(result.replace("hunter2", "[REDACTED]"))
+        } else {
+            std::borrow::Cow::Borrowed(result)
+        }
+    }
+}
+
+#[tokio::test]
+async fn dispatch_redaction_scrubs_invoked_and_completed() {
+    let capture = CapturingLayer::new();
+    let subscriber = tracing_subscriber::registry().with(capture.clone());
+    let _guard = subscriber.set_default();
+
+    // `echo` returns its input, so the secret would otherwise appear in BOTH
+    // the invoked args and the completed result.
+    let tools = registry_with_echo();
+    let observe =
+        DispatchObserveHook::new("conv-redact").with_redaction_policy(Arc::new(DispatchScrubber));
+    let invs = vec![ToolInvocation::new("echo", json!({ "password": "hunter2" })).unwrap()];
+
+    let results = dispatch_tool_invocations_with_hooks(&tools, &invs, &[&observe])
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    let query = capture.query();
+
+    let invoked = query.filter(&EventFilter::new().kind("tool.invoked"));
+    assert_eq!(invoked.len(), 1);
+    match &invoked[0].kind {
+        EventKind::ToolInvoked { args_json, .. } => {
+            assert!(
+                !args_json.contains("hunter2"),
+                "dispatch args secret leaked: {args_json}"
+            );
+            assert!(args_json.contains("[REDACTED]"));
+        }
+        other => panic!("expected ToolInvoked, got {other:?}"),
+    }
+
+    let completed = query.filter(&EventFilter::new().kind("tool.completed"));
+    assert_eq!(completed.len(), 1);
+    match &completed[0].kind {
+        EventKind::ToolCompleted { result, .. } => {
+            assert!(
+                !result.contains("hunter2"),
+                "dispatch result secret leaked: {result}"
+            );
+            assert!(result.contains("[REDACTED]"));
+        }
+        other => panic!("expected ToolCompleted, got {other:?}"),
     }
 }
 

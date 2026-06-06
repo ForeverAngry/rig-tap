@@ -135,7 +135,9 @@ pub use observed_memory::ObservedMemory;
 pub use query::{EventFilter, EventQuery};
 pub use redaction::{IdentityRedaction, RedactionPolicy};
 #[cfg(feature = "openai-responses")]
-pub use responses_extract::{HostedToolCall, emit_hosted_tools, extract_hosted_tools};
+pub use responses_extract::{
+    HostedToolCall, emit_hosted_tools, emit_hosted_tools_redacted, extract_hosted_tools,
+};
 #[cfg(all(feature = "openai-responses-websocket", not(target_family = "wasm")))]
 pub use responses_session::{ObservedResponsesSession, ResponsesSessionObserver};
 pub use sampling::{AdaptiveErrorPolicy, AlwaysSample, RatePolicy, SamplingPolicy};

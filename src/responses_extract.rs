@@ -205,10 +205,36 @@ fn compact_json_subset(item: &Value, keys: &[&str]) -> String {
 ///
 /// `response_id` is stamped on every emitted event when `Some`. The
 /// extractor also tries `payload["id"]` when the caller passes `None`.
+///
+/// This helper performs **no redaction**. If the payload may contain PII or
+/// secrets, use [`emit_hosted_tools_redacted`] with a
+/// [`RedactionPolicy`](crate::RedactionPolicy) instead.
 pub fn emit_hosted_tools(
     conversation_id: impl AsRef<str>,
     response_id: Option<&str>,
     payload: &Value,
+) -> usize {
+    emit_hosted_tools_redacted(
+        conversation_id,
+        response_id,
+        payload,
+        &crate::redaction::IdentityRedaction,
+    )
+}
+
+/// Like [`emit_hosted_tools`], but scrubs every hosted-tool `args_json` and
+/// `result_json` through `redaction` before truncation and emission.
+///
+/// Use this on producer paths that surface provider-hosted tool payloads
+/// (`web_search`, `file_search`, `code_interpreter`, …) which can echo back
+/// user input or sensitive data, so the same
+/// [`RedactionPolicy`](crate::RedactionPolicy) that guards the agent and
+/// kernel paths also covers hosted tools.
+pub fn emit_hosted_tools_redacted(
+    conversation_id: impl AsRef<str>,
+    response_id: Option<&str>,
+    payload: &Value,
+    redaction: &dyn crate::redaction::RedactionPolicy,
 ) -> usize {
     let conversation_id = conversation_id.as_ref();
     let resolved_response_id = response_id
@@ -226,9 +252,11 @@ pub fn emit_hosted_tools(
             result_json,
             ..
         } = call;
-        let (args_payload, args_truncated) = truncate_utf8(&args_json, PAYLOAD_TRUNCATE_BYTES);
+        let scrubbed_args = redaction.redact_tool_args(&tool_name, &args_json);
+        let scrubbed_result = redaction.redact_tool_result(&tool_name, &result_json);
+        let (args_payload, args_truncated) = truncate_utf8(&scrubbed_args, PAYLOAD_TRUNCATE_BYTES);
         let (result_payload, result_truncated) =
-            truncate_utf8(&result_json, PAYLOAD_TRUNCATE_BYTES);
+            truncate_utf8(&scrubbed_result, PAYLOAD_TRUNCATE_BYTES);
         emit_kind(
             conversation_id,
             EventKind::ToolHostedInvoked {
