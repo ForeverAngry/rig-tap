@@ -191,6 +191,9 @@ async fn emit_kind_writes_otel_routable_scalar_fields() {
         EventKind::PromptStarted {
             model: "model-a".into(),
             messages_in: 2,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
         },
     );
 
@@ -261,6 +264,9 @@ async fn capturing_layer_exposes_query_snapshot() {
         EventKind::PromptStarted {
             model: "model-b".into(),
             messages_in: 1,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
         },
     );
 
@@ -382,6 +388,9 @@ fn is_failure_related() {
     let started = rig_tap::EventKind::PromptStarted {
         model: "m".into(),
         messages_in: 1,
+        temperature: None,
+        top_p: None,
+        max_tokens: None,
     };
     assert!(!started.is_failure_related());
 }

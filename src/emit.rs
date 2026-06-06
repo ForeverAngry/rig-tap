@@ -44,19 +44,19 @@ pub fn current_span_id() -> Option<u64> {
 /// Build a fully-formed [`ObservabilityEvent`] for `kind` belonging to
 /// `conversation_id`, stamped with the next tick and current wall time.
 pub fn build_event(conversation_id: impl Into<String>, kind: EventKind) -> ObservabilityEvent {
-    build_event_with(conversation_id, kind, None, None)
+    build_event_with(conversation_id, kind, None, None, None)
 }
 
-/// Like [`build_event`], but also stamps an optional logical `agent_id` and
-/// distributed `trace_id` onto the envelope. Producers running more than one
-/// agent, or participating in an external trace, use this to populate the
-/// [`ObservabilityEvent::agent_id`] / [`ObservabilityEvent::trace_id`]
-/// correlators. Passing `None` for both is equivalent to [`build_event`].
+/// Like [`build_event`], but also stamps an optional logical `agent_id`,
+/// distributed `trace_id`, and `severity` onto the envelope. Producers
+/// running more than one agent, or participating in an external trace,
+/// use this to populate the correlators.
 pub fn build_event_with(
     conversation_id: impl Into<String>,
     kind: EventKind,
     agent_id: Option<String>,
     trace_id: Option<u64>,
+    severity: Option<crate::event::Severity>,
 ) -> ObservabilityEvent {
     ObservabilityEvent {
         version: SCHEMA_VERSION,
@@ -66,6 +66,7 @@ pub fn build_event_with(
         span_id: current_span_id(),
         agent_id,
         trace_id,
+        severity,
         kind,
     }
 }
@@ -97,6 +98,7 @@ pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
         // collectors group multi-agent producers by actor without parsing
         // the JSON envelope. `trace_id` is intentionally JSON-only.
         rig_tap.agent_id = event.agent_id.as_deref().unwrap_or(""),
+        rig_tap.severity = event.severity.map(|s| s.as_str()).unwrap_or(""),
         // Per-variant scalar correlators. Absent values are emitted as
         // empty strings (see `ScalarFields` rustdoc) — collectors should
         // filter `rig_tap.<field> != ""` to detect presence.
@@ -135,16 +137,17 @@ pub fn emit_kind(conversation_id: impl Into<String>, kind: EventKind) {
     emit(&event);
 }
 
-/// Like [`emit_kind`], but stamps an optional logical `agent_id` and
-/// distributed `trace_id` onto the envelope before emitting. See
-/// [`build_event_with`].
+/// Like [`emit_kind`], but stamps an optional logical `agent_id`,
+/// distributed `trace_id`, and `severity` onto the envelope before emitting.
+/// See [`build_event_with`].
 pub fn emit_kind_with(
     conversation_id: impl Into<String>,
     kind: EventKind,
     agent_id: Option<String>,
     trace_id: Option<u64>,
+    severity: Option<crate::event::Severity>,
 ) {
-    let event = build_event_with(conversation_id, kind, agent_id, trace_id);
+    let event = build_event_with(conversation_id, kind, agent_id, trace_id, severity);
     emit(&event);
 }
 
@@ -172,6 +175,9 @@ mod tests {
             EventKind::PromptStarted {
                 model: "m".into(),
                 messages_in: 0,
+                temperature: None,
+                top_p: None,
+                max_tokens: None,
             },
         );
         assert_eq!(evt.version, SCHEMA_VERSION);

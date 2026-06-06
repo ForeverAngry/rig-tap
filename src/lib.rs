@@ -119,7 +119,7 @@ pub use emit::{
 pub use error::Error;
 pub use event::{
     ErrorClass, EventKind, ObservabilityEvent, PAYLOAD_TRUNCATE_BYTES, SCHEMA_VERSION,
-    ScalarFields, truncate_utf8,
+    ScalarFields, Severity, truncate_utf8,
 };
 pub use extract::extract_event;
 pub use hook::{

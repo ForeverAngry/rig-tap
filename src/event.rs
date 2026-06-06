@@ -62,9 +62,46 @@ pub struct ObservabilityEvent {
     /// [`crate::emit::build_event_with`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<u64>,
+    /// Optional severity level for this event. Useful for non-error warning
+    /// signals (e.g. partial results, recovered degradation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
     /// Event-specific payload. Flattened into the parent object.
     #[serde(flatten)]
     pub kind: EventKind,
+}
+
+/// Envelope-level severity classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Severity {
+    /// Diagnostic or tracing information.
+    Trace,
+    /// General debugging information.
+    Debug,
+    /// Normal operational event.
+    Info,
+    /// A non-fatal warning (e.g., partial degradation, retried failure).
+    Warn,
+    /// A failure or error.
+    Error,
+    /// A fatal error requiring immediate shutdown.
+    Fatal,
+}
+
+impl Severity {
+    /// Returns the string discriminant.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Trace => "trace",
+            Severity::Debug => "debug",
+            Severity::Info => "info",
+            Severity::Warn => "warn",
+            Severity::Error => "error",
+            Severity::Fatal => "fatal",
+        }
+    }
 }
 
 impl ObservabilityEvent {
@@ -80,6 +117,7 @@ impl ObservabilityEvent {
             span_id: None,
             agent_id: None,
             trace_id: None,
+            severity: None,
             kind,
         }
     }
@@ -179,6 +217,15 @@ pub enum EventKind {
         model: String,
         /// Number of messages in the history at the time of the call.
         messages_in: usize,
+        /// Sampling temperature used for the prompt, if tracked.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        temperature: Option<f64>,
+        /// Top-P sampling parameter used for the prompt, if tracked.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        top_p: Option<f64>,
+        /// Maximum output tokens allowed for the prompt, if tracked.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        max_tokens: Option<u64>,
     },
     /// A prompt finished; the model returned a completion response.
     #[serde(rename = "prompt.completed")]
@@ -619,6 +666,48 @@ pub enum EventKind {
         #[serde(skip_serializing_if = "Option::is_none")]
         sample_size: Option<u64>,
     },
+    /// An embedding generation request completed.
+    #[serde(rename = "embedding.completed")]
+    EmbeddingCompleted {
+        /// The model used to generate embeddings.
+        model: String,
+        /// Number of documents/items embedded in this request.
+        documents: usize,
+        /// Provider-reported input tokens, if known.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        tokens_in: Option<u64>,
+        /// Total time elapsed for the embedding execution, if tracked.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+    },
+    /// A retrieval operation (e.g. vector search) completed.
+    #[serde(rename = "retrieval.queried")]
+    RetrievalQueried {
+        /// The search query strings, if the producer opts into logging them.
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        queries: Vec<String>,
+        /// The requested limit on top results.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        top_k: Option<usize>,
+        /// The actual number of results returned.
+        results: usize,
+        /// Total time elapsed for the retrieval operation, if tracked.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+    },
+    /// A reranking operation completed.
+    #[serde(rename = "rerank.completed")]
+    RerankCompleted {
+        /// The model used for reranking.
+        model: String,
+        /// Number of candidate documents passed in for reranking.
+        documents_in: usize,
+        /// Number of documents returned after reranking.
+        documents_out: usize,
+        /// Total time elapsed for the reranking operation, if tracked.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+    },
 }
 
 #[doc(hidden)]
@@ -656,6 +745,9 @@ impl EventKind {
             EventKind::ResponseTurnCompleted { .. } => "response.turn_completed",
             EventKind::ResponseSessionEnded { .. } => "response.session_ended",
             EventKind::EvalReport { .. } => "eval.report",
+            EventKind::EmbeddingCompleted { .. } => "embedding.completed",
+            EventKind::RetrievalQueried { .. } => "retrieval.queried",
+            EventKind::RerankCompleted { .. } => "rerank.completed",
         }
     }
 
@@ -801,6 +893,11 @@ impl EventKind {
                     f.verdict = v;
                 }
             }
+            EventKind::EmbeddingCompleted { model, .. }
+            | EventKind::RerankCompleted { model, .. } => {
+                f.model = model;
+            }
+            EventKind::RetrievalQueried { .. } => {}
             EventKind::ContextSampled { .. }
             | EventKind::ContextPersisted { .. }
             | EventKind::ContextCompacted { .. }
@@ -888,6 +985,17 @@ impl EventKind {
         matches!(self, EventKind::EvalReport { .. })
     }
 
+    /// Returns `true` if the event is part of a retrieval or RAG pipeline
+    /// (`embedding.completed`, `retrieval.queried`, `rerank.completed`).
+    pub fn is_retrieval_related(&self) -> bool {
+        matches!(
+            self,
+            EventKind::EmbeddingCompleted { .. }
+                | EventKind::RetrievalQueried { .. }
+                | EventKind::RerankCompleted { .. }
+        )
+    }
+
     /// Extracts the stable `call_id` for tool events, if present.
     pub fn tool_call_id(&self) -> Option<&str> {
         match self {
@@ -944,9 +1052,13 @@ mod tests {
             span_id: None,
             agent_id: None,
             trace_id: None,
+            severity: Some(Severity::Info),
             kind: EventKind::PromptStarted {
                 model: "gpt-4o".into(),
                 messages_in: 3,
+                temperature: None,
+                top_p: None,
+                max_tokens: None,
             },
         };
 
@@ -955,12 +1067,14 @@ mod tests {
         assert_eq!(json["model"], "gpt-4o");
         assert_eq!(json["messages_in"], 3);
         assert_eq!(json["tick"], 42);
+        assert_eq!(json["severity"], "info");
         assert_eq!(json["version"], SCHEMA_VERSION);
         // Absent envelope correlators must not serialize as `null` keys.
         let obj = json.as_object().unwrap();
         assert!(!obj.contains_key("span_id"));
         assert!(!obj.contains_key("agent_id"));
         assert!(!obj.contains_key("trace_id"));
+        assert!(!obj.contains_key("temperature"));
 
         // Round-trip.
         let parsed: ObservabilityEvent = serde_json::from_value(json).unwrap();
@@ -977,9 +1091,13 @@ mod tests {
             span_id: Some(99),
             agent_id: Some("planner".into()),
             trace_id: Some(0xABCD),
+            severity: None,
             kind: EventKind::PromptStarted {
                 model: "gpt-4o".into(),
                 messages_in: 1,
+                temperature: Some(0.7),
+                top_p: Some(1.0),
+                max_tokens: Some(100),
             },
         };
 
@@ -987,6 +1105,7 @@ mod tests {
         assert_eq!(json["agent_id"], "planner");
         assert_eq!(json["trace_id"], 0xABCD);
         assert_eq!(json["span_id"], 99);
+        assert_eq!(json["temperature"], 0.7);
 
         let parsed: ObservabilityEvent = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, event);
@@ -1096,6 +1215,9 @@ mod tests {
             EventKind::PromptStarted {
                 model: "m".into(),
                 messages_in: 1,
+                temperature: None,
+                top_p: None,
+                max_tokens: None,
             },
             EventKind::PromptCompleted {
                 model: "m".into(),

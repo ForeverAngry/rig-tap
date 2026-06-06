@@ -226,7 +226,13 @@ impl<M: CompletionModel> TelemetryHook<M> {
     /// Build + emit `kind` for `conversation_id`, stamping the configured
     /// [`agent_id`](TelemetryHookConfig::agent_id).
     fn emit_event(&self, conversation_id: String, kind: EventKind) {
-        emit_kind_with(conversation_id, kind, self.config.agent_id.clone(), None);
+        emit_kind_with(
+            conversation_id,
+            kind,
+            self.config.agent_id.clone(),
+            None,
+            None,
+        );
     }
 
     fn resolved_conversation_id(&self) -> String {
@@ -355,6 +361,9 @@ where
                 EventKind::PromptStarted {
                     model: self.config.model.clone(),
                     messages_in,
+                    temperature: None,
+                    top_p: None,
+                    max_tokens: None,
                 },
             );
         }

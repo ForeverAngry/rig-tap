@@ -558,6 +558,7 @@ mod tests {
             span_id: None,
             agent_id: None,
             trace_id: None,
+            severity: None,
             kind,
         }
     }
@@ -624,6 +625,9 @@ mod tests {
                 EventKind::PromptStarted {
                     model: "m".into(),
                     messages_in: 1,
+                    temperature: None,
+                    top_p: None,
+                    max_tokens: None,
                 },
             ),
             event(

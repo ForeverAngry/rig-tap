@@ -7,6 +7,7 @@ and what is deliberately out of scope. For day-to-day conventions see
 
 ## Landed
 
+- **M6 — Pipeline Kinds & Severity (Tier 3):** Added `embedding.completed`, `retrieval.queried`, and `rerank.completed` for RAG telemetry, plus an optional `severity` enum (promoted to `rig_tap.severity`) on the main envelope. Also added replay metadata (`temperature`, `top_p`, `max_tokens`) to `prompt.started`. Additive components keeping schema v1 compatible.
 - **M5 — `context.persisted` memory symmetry:** New `EventKind::ContextPersisted { message_count, byte_size }` (`kind = "context.persisted"`), emitted from `ObservedMemory::append`, mirroring the `context.sampled` read-side path. Additive; classified by `is_memory_related()`.
 - **M4 — Identity correlators:** Added optional `agent_id: Option<String>` and `trace_id: Option<u64>` to the `ObservabilityEvent` envelope (both `#[serde(default, skip_serializing_if)]`). `build_event_with` / `emit_kind_with` thread them through; `agent_id` is promoted to the `rig_tap.agent_id` scalar (empty-string sentinel) while `trace_id` stays JSON-only. `TelemetryHookConfig::agent_id` + `TelemetryHook::with_agent_id` stamp every hook-emitted event. No `SCHEMA_VERSION` bump.
 - **M3 — Latency milestones:** Added optional `duration_ms` to `prompt.completed`, `tool.completed`, `tool.hosted_completed`, and `response.turn_completed`, plus `time_to_first_token_ms` to `prompt.completed`. All additive + `skip_serializing_if`.
@@ -165,22 +166,18 @@ no `SCHEMA_VERSION` bump.
   byte_size }` on `append`, closing the loop so consumers no longer need
   to pair with `TelemetryHook` for the write side.
 
-### Tier 3 — deferred (speculative; gated on a real producer)
+### Tier 3 — landed (speculative; now built into schema)
 
-Held behind the Reopen Triggers below rather than speculatively baked
-into the contract:
-
-- Embedding / retrieval / rerank pipeline kinds
-  (`embedding.completed`, `retrieval.queried`, `rerank.completed`). These
-  tie offline `eval.report` to live traffic, but should wait until a
-  retrieval producer (`rig-retrieval-evals` or similar) is ready to wire
-  them — otherwise they join the pile of never-emitted variants.
-- A `severity` enum on the envelope — likely redundant once the failure
-  family lands; revisit only if a non-error "warn" signal (partial
-  results, recovered degradation) proves it needs its own axis.
-- Replay metadata on `prompt.started` (`temperature`, `top_p`,
-  `max_tokens`). Useful for repro but raises payload-size and config
-  surface; defer until a concrete debugging workflow asks for it.
+- **Embedding / retrieval / rerank pipeline kinds.** ✅ Landed (M6).
+  Added `embedding.completed`, `retrieval.queried`, and `rerank.completed`
+  to tie offline `eval.report` to live traffic. `is_retrieval_related()`
+  added for classification.
+- **Envelope `severity`.** ✅ Landed (M6). Added an optional `severity`
+  enum field to `ObservabilityEvent` (Trace, Debug, Info, Warn, Error, Fatal),
+  promoted to the `rig_tap.severity` scalar. Unlocks surfacing non-error
+  degradation or standard tracing severities inside the schema.
+- **Replay metadata.** ✅ Landed (M6). Added optional `temperature`, `top_p`,
+  and `max_tokens` tracking to `prompt.started` for concrete debugging and repro workflows.
 
 ## Action Plan
 
@@ -287,3 +284,12 @@ below). Revisit at that point and slot into this plan as M6+.
   ready to emit live pipeline telemetry — promote the deferred Tier 3
   `embedding.*` / `retrieval.*` / `rerank.*` kinds into the schema then,
   not before.
+
+## Future Explorations
+
+### Generative UI / AI SDK Streams
+`rig-tap` is strictly designed as a lossy, discrete, collector-bound observability contract. Generative User Interfaces (like Vercel's AI SDK) require the structural opposite: a non-truncating, streaming projection mapping agent activity directly to client-side `UIMessage` / `UIPart` objects via Server-Sent Events (SSE) or WebSockets.
+
+Because Generative UI needs mid-stream tool deltas (`input-available` / `output-available`) and pristine stringified payloads, baking it directly into `rig-tap` would violate this crate's 4KB `PAYLOAD_TRUNCATE_BYTES` limit and discrete event architecture. 
+
+If the Rig ecosystem needs to expose agents to AI SDK-compatible React/Svelte UIs natively in the future, it should be built as a separate companion crate (e.g., `rig-tap-ui`). That crate would consume Rig's streams to project standard Vercel AI SDK text/tool-call stream parts (`0:"text"`, `9:"tool_call"`, etc.) over HTTP, leaving `rig-tap` focused purely on backend observability and TSDB metrics.
