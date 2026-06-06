@@ -119,6 +119,7 @@ pub struct ResponsesSessionObserver {
     turn_tokens_out: Option<u64>,
     turn_hosted_tool_calls: usize,
     turn_started_at: Option<Instant>,
+    redaction: std::sync::Arc<dyn crate::redaction::RedactionPolicy>,
 }
 
 impl ResponsesSessionObserver {
@@ -150,7 +151,19 @@ impl ResponsesSessionObserver {
             turn_tokens_out: None,
             turn_hosted_tool_calls: 0,
             turn_started_at: None,
+            redaction: std::sync::Arc::new(crate::redaction::IdentityRedaction),
         }
+    }
+
+    /// Supply a custom policy for redacting sensitive fields (PII, credentials)
+    /// from hosted tool payloads before they are serialized and emitted.
+    #[must_use]
+    pub fn with_redaction_policy(
+        mut self,
+        policy: std::sync::Arc<dyn crate::redaction::RedactionPolicy>,
+    ) -> Self {
+        self.redaction = policy;
+        self
     }
 
     /// Returns the session identifier this observer was constructed with.
@@ -270,6 +283,7 @@ impl ResponsesSessionObserver {
                         &self.conversation_id,
                         response_id.as_deref(),
                         call,
+                        self.redaction.as_ref(),
                     );
                 }
                 self.finalize_turn();
@@ -372,6 +386,7 @@ fn emit_hosted_invoked_completed(
     conversation_id: &str,
     response_id: Option<&str>,
     call: crate::responses_extract::HostedToolCall,
+    redaction: &dyn crate::redaction::RedactionPolicy,
 ) {
     use crate::event::{PAYLOAD_TRUNCATE_BYTES, truncate_utf8};
     let crate::responses_extract::HostedToolCall {
@@ -384,8 +399,11 @@ fn emit_hosted_invoked_completed(
         ..
     } = call;
     let response_id = response_id.map(str::to_owned);
-    let (args_payload, args_truncated) = truncate_utf8(&args_json, PAYLOAD_TRUNCATE_BYTES);
-    let (result_payload, result_truncated) = truncate_utf8(&result_json, PAYLOAD_TRUNCATE_BYTES);
+    let scrubbed_args = redaction.redact_tool_args(&tool_name, &args_json);
+    let scrubbed_result = redaction.redact_tool_result(&tool_name, &result_json);
+    let (args_payload, args_truncated) = truncate_utf8(&scrubbed_args, PAYLOAD_TRUNCATE_BYTES);
+    let (result_payload, result_truncated) =
+        truncate_utf8(&scrubbed_result, PAYLOAD_TRUNCATE_BYTES);
     emit_kind(
         conversation_id,
         EventKind::ToolHostedInvoked {

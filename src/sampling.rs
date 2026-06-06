@@ -68,6 +68,41 @@ impl SamplingPolicy for AlwaysSample {
     }
 }
 
+/// A policy that wraps an underlying downsampler but guarantees that critical
+/// paths like failures, retries, and high-latency anomalies always bypass the
+/// drop rate and get emitted 100% of the time.
+///
+/// This provides simple "Adaptive Sampling" or "Tail-based Sampling" so you
+/// can run a busy swarm at `0.01` rate for happy paths but capture `1.0` of
+/// any errors or recoveries.
+#[derive(Debug, Clone)]
+pub struct AdaptiveErrorPolicy<P: SamplingPolicy> {
+    inner: P,
+}
+
+impl<P: SamplingPolicy> AdaptiveErrorPolicy<P> {
+    /// Wrap an existing policy (like [`RatePolicy`]) with error-bypassing logic.
+    pub fn new(inner: P) -> Self {
+        Self { inner }
+    }
+}
+
+impl<P: SamplingPolicy> SamplingPolicy for AdaptiveErrorPolicy<P> {
+    fn should_sample(&self, kind: &str, correlator: &str) -> bool {
+        // Automatically retain all negative paths and recoveries
+        if kind.ends_with(".failed")
+            || kind.ends_with(".terminated")
+            || kind.ends_with(".skipped")
+            || kind == "compose.recovery"
+            || kind == "compose.retry_attempt"
+        {
+            return true;
+        }
+
+        self.inner.should_sample(kind, correlator)
+    }
+}
+
 /// Per-kind rate sampler with deterministic, paired-event-safe
 /// decisions.
 ///

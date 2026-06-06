@@ -74,6 +74,7 @@ pub struct DispatchObserveHook {
     /// can emit `compose.kernel_shutdown` without re-borrowing the agent.
     kernel_id_cache: Mutex<Option<String>>,
     in_flight: Mutex<Option<(String, Instant)>>,
+    redaction: Arc<dyn crate::redaction::RedactionPolicy>,
 }
 
 static INSTANCE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -97,6 +98,7 @@ impl DispatchObserveHook {
             kernel_started: AtomicBool::new(false),
             kernel_id_cache: Mutex::new(None),
             in_flight: Mutex::new(None),
+            redaction: Arc::new(crate::redaction::IdentityRedaction),
         }
     }
 
@@ -105,6 +107,17 @@ impl DispatchObserveHook {
     #[must_use]
     pub fn with_payload_truncate_bytes(mut self, bytes: usize) -> Self {
         self.payload_truncate_bytes = bytes;
+        self
+    }
+
+    /// Supply a custom policy for redacting sensitive fields (PII, credentials)
+    /// from tool payloads before they are serialized and emitted.
+    #[must_use]
+    pub fn with_redaction_policy(
+        mut self,
+        policy: Arc<dyn crate::redaction::RedactionPolicy>,
+    ) -> Self {
+        self.redaction = policy;
         self
     }
 
@@ -157,7 +170,8 @@ impl DispatchObserveHook {
 
     fn emit_invoked(&self, invocation: &ToolInvocation, call_id: &str) {
         let args_raw = serde_json::to_string(&invocation.args).unwrap_or_default();
-        let (args_json, truncated) = truncate_utf8(&args_raw, self.payload_truncate_bytes);
+        let scrubbed_args = self.redaction.redact_tool_args(&invocation.name, &args_raw);
+        let (args_json, truncated) = truncate_utf8(&scrubbed_args, self.payload_truncate_bytes);
         emit_kind(
             self.conversation_id.clone(),
             EventKind::ToolInvoked {
@@ -354,8 +368,11 @@ impl ToolDispatchHook for DispatchObserveHook {
         match outcome {
             ToolInvocationOutcome::Completed => {
                 let result_raw = serde_json::to_string(&result.output).unwrap_or_default();
+                let scrubbed_result = self
+                    .redaction
+                    .redact_tool_result(&result.invocation.name, &result_raw);
                 let (result_text, truncated) =
-                    truncate_utf8(&result_raw, self.payload_truncate_bytes);
+                    truncate_utf8(&scrubbed_result, self.payload_truncate_bytes);
                 emit_kind(
                     self.conversation_id.clone(),
                     EventKind::ToolCompleted {

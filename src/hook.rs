@@ -10,6 +10,7 @@ use rig::completion::{CompletionModel, CompletionResponse, Message};
 
 use crate::emit::emit_kind_with;
 use crate::event::{EventKind, PAYLOAD_TRUNCATE_BYTES, truncate_utf8};
+use crate::redaction::{IdentityRedaction, RedactionPolicy};
 use crate::sampling::{AlwaysSample, SamplingPolicy};
 
 /// Caller-supplied resolver for the conversation ID stamped on emitted
@@ -108,6 +109,7 @@ pub struct TelemetryHook<M: CompletionModel> {
     model_resolver: Option<ModelResolver<M::Response>>,
     previous_response_id_resolver: Option<PreviousResponseIdResolver<M::Response>>,
     sampling: Arc<dyn SamplingPolicy>,
+    redaction: Arc<dyn RedactionPolicy>,
     _model: PhantomData<fn() -> M>,
 }
 
@@ -120,6 +122,7 @@ impl<M: CompletionModel> TelemetryHook<M> {
             model_resolver: None,
             previous_response_id_resolver: None,
             sampling: Arc::new(AlwaysSample),
+            redaction: Arc::new(IdentityRedaction),
             _model: PhantomData,
         }
     }
@@ -211,6 +214,16 @@ impl<M: CompletionModel> TelemetryHook<M> {
     #[must_use]
     pub fn with_sampling_policy(mut self, policy: Arc<dyn SamplingPolicy>) -> Self {
         self.sampling = policy;
+        self
+    }
+
+    /// Supply a custom policy for redacting sensitive fields (PII, credentials)
+    /// from tool payloads before they are serialized and emitted.
+    ///
+    /// By default, [`IdentityRedaction`] passes all text unmodified.
+    #[must_use]
+    pub fn with_redaction_policy(mut self, policy: Arc<dyn RedactionPolicy>) -> Self {
+        self.redaction = policy;
         self
     }
 
@@ -317,6 +330,7 @@ impl<M: CompletionModel> Clone for TelemetryHook<M> {
             model_resolver: self.model_resolver.clone(),
             previous_response_id_resolver: self.previous_response_id_resolver.clone(),
             sampling: self.sampling.clone(),
+            redaction: self.redaction.clone(),
             _model: PhantomData,
         }
     }
@@ -339,6 +353,7 @@ impl<M: CompletionModel> std::fmt::Debug for TelemetryHook<M> {
                 &self.previous_response_id_resolver.as_ref().map(|_| "<fn>"),
             )
             .field("sampling", &self.sampling)
+            .field("redaction", &self.redaction)
             .finish_non_exhaustive()
     }
 }
@@ -416,7 +431,9 @@ where
         internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
-        let (args_json, truncated) = truncate_utf8(args, self.config.payload_truncate_bytes);
+        let scrubbed_args = self.redaction.redact_tool_args(tool_name, args);
+        let (args_json, truncated) =
+            truncate_utf8(&scrubbed_args, self.config.payload_truncate_bytes);
         if self
             .sampling
             .should_sample("tool.invoked", internal_call_id)
@@ -443,7 +460,9 @@ where
         _args: &str,
         result: &str,
     ) -> HookAction {
-        let (result, truncated) = truncate_utf8(result, self.config.payload_truncate_bytes);
+        let scrubbed_result = self.redaction.redact_tool_result(tool_name, result);
+        let (result, truncated) =
+            truncate_utf8(&scrubbed_result, self.config.payload_truncate_bytes);
         if self
             .sampling
             .should_sample("tool.completed", internal_call_id)

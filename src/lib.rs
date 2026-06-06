@@ -99,8 +99,10 @@ mod error;
 mod event;
 mod hook;
 mod insights;
+mod metrics_ext;
 mod observed_memory;
 mod query;
+mod redaction;
 #[cfg(feature = "openai-responses")]
 pub mod responses_extract;
 #[cfg(all(feature = "openai-responses-websocket", not(target_family = "wasm")))]
@@ -131,10 +133,11 @@ pub use insights::{
 };
 pub use observed_memory::ObservedMemory;
 pub use query::{EventFilter, EventQuery};
+pub use redaction::{IdentityRedaction, RedactionPolicy};
 #[cfg(feature = "openai-responses")]
 pub use responses_extract::{HostedToolCall, emit_hosted_tools, extract_hosted_tools};
 #[cfg(all(feature = "openai-responses-websocket", not(target_family = "wasm")))]
 pub use responses_session::{ObservedResponsesSession, ResponsesSessionObserver};
-pub use sampling::{AlwaysSample, RatePolicy, SamplingPolicy};
+pub use sampling::{AdaptiveErrorPolicy, AlwaysSample, RatePolicy, SamplingPolicy};
 #[cfg(feature = "subscriber")]
 pub use subscriber::CapturingLayer;

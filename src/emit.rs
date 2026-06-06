@@ -114,6 +114,10 @@ pub fn try_emit(event: &ObservabilityEvent) -> Result<(), Error> {
         rig_tap.verdict = fields.verdict,
         rig_tap.error_class = fields.error_class,
     );
+
+    #[cfg(feature = "metrics")]
+    crate::metrics_ext::emit_metrics(event);
+
     Ok(())
 }
 
