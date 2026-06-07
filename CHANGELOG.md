@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/ForeverAngry/rig-tap/compare/v0.3.0...v0.4.0) - 2026-06-07
+
+### Added
+
+- *(metrics)* Add support for native metrics and redaction policies in telemetry
+- *(redaction)* Enhance redaction policies and add tests for hosted tool scrubbing
+- *(redaction)* Implement data redaction policies for sensitive information in telemetry
+- *(event)* Add severity field and new event kinds for enhanced observability
+- *(event)* Add agent_id and trace_id to ObservabilityEvent for multi-agent support
+- *(insights)* Add in-process insight aggregation for observability events
+
 ## [0.3.0](https://github.com/ForeverAngry/rig-tap/compare/v0.2.2...v0.3.0) - 2026-06-04
 
 ### Added
