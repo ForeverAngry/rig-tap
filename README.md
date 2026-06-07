@@ -108,6 +108,13 @@ kernels, and application code to speak the same telemetry language.
   dashboards without adding a service runtime.
 - **`ChainedHook<A, B>`** — compose two `PromptHook`s on a single agent (e.g.
   pair `MemvidPersistHook` with `TelemetryHook`).
+- **`SamplingPolicy` + `AdaptiveErrorPolicy`** — pluggable downsampling, with
+  a tail-based wrapper that always keeps failures and recoveries.
+- **`RedactionPolicy`** — scrubs PII / secrets from tool payloads before
+  emission across the agent, kernel-dispatch, and hosted-tool paths;
+  zero-copy by default.
+- **Native metrics** (feature `metrics`) — emit pre-aggregated counters and
+  histograms through the `metrics` facade for Prometheus / TSDB dashboards.
 
 ## Quick start
 
@@ -342,6 +349,95 @@ are both dropped — pairs stay coherent.
 Custom policies (allowlists, error-only, tail-based) can implement
 `SamplingPolicy::should_sample(kind, correlator)` and be plugged in via
 `with_sampling_policy(Arc::new(...))`.
+
+For tail-based sampling, `AdaptiveErrorPolicy` wraps any inner policy and
+guarantees that genuine failure and recovery anomalies always bypass the
+drop rate, so you can run happy paths at a low rate while keeping 100% of
+problems:
+
+```rust,no_run
+use std::sync::Arc;
+use rig_tap::{AdaptiveErrorPolicy, RatePolicy, TelemetryHook, TelemetryHookConfig};
+
+# fn make_hook<M: rig::completion::CompletionModel>() -> TelemetryHook<M> {
+// Drop 99% of happy-path traffic, but never an error or recovery.
+let inner = RatePolicy::new().with_default_rate(0.01);
+let policy = AdaptiveErrorPolicy::new(inner)
+    // optionally treat skips as signal in your deployment:
+    .also_keep("tool.skipped");
+
+TelemetryHook::new(TelemetryHookConfig::new("gpt-4o", "thread-1"))
+    .with_sampling_policy(Arc::new(policy))
+# }
+```
+
+The always-keep set is a deliberate allowlist (`prompt.failed`,
+`tool.failed`, `tool.terminated`, `compose.recovery`,
+`compose.retry_attempt`) — not a broad suffix match. `tool.skipped` is a
+routine gating decision, not an anomaly, so it is dropped by default and
+must be opted in via `also_keep`.
+
+## Redacting sensitive payloads
+
+Tool arguments and results can carry PII or secrets. `TelemetryHook`,
+`DispatchObserveHook`, and `ResponsesSessionObserver` accept a
+`RedactionPolicy` that scrubs `args_json` / `result` payloads **before**
+they are truncated and emitted, so secrets never reach the wire or a
+collector. The default policy (`IdentityRedaction`) is zero-copy and does
+nothing, so the common path keeps its no-allocation behavior.
+
+```rust,no_run
+use std::borrow::Cow;
+use std::sync::Arc;
+use rig_tap::{RedactionPolicy, TelemetryHook, TelemetryHookConfig};
+
+#[derive(Debug)]
+struct MaskBearerTokens;
+
+impl RedactionPolicy for MaskBearerTokens {
+    fn redact_tool_args<'a>(&self, _tool: &str, args: &'a str) -> Cow<'a, str> {
+        if args.contains("Bearer ") {
+            Cow::Owned(/* scrub and return owned */ args.replace("Bearer ", "Bearer [REDACTED] "))
+        } else {
+            Cow::Borrowed(args) // no allocation when nothing matches
+        }
+    }
+    fn redact_tool_result<'a>(&self, _tool: &str, result: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed(result)
+    }
+}
+
+# fn make_hook<M: rig::completion::CompletionModel>() -> TelemetryHook<M> {
+TelemetryHook::new(TelemetryHookConfig::new("gpt-4o", "thread-1"))
+    .with_redaction_policy(Arc::new(MaskBearerTokens))
+# }
+```
+
+Returning `Cow::Borrowed` when nothing needs changing keeps the hot path
+allocation-free; return `Cow::Owned` only when you actually rewrite the
+payload. For the producer-side hosted-tool path, use
+`emit_hosted_tools_redacted` instead of `emit_hosted_tools` to apply the
+same policy to provider-hosted tool calls (`web_search`, `file_search`, …).
+
+## Native metrics (feature `metrics`)
+
+By default `rig-tap` emits only `tracing` events, leaving aggregation to an
+OpenTelemetry collector. Enable the `metrics` feature to *also* emit
+pre-aggregated counters and histograms through the
+[`metrics`](https://crates.io/crates/metrics) facade, so a Prometheus / TSDB
+dashboard works without a collector-side log-to-metric pipeline:
+
+```toml
+[dependencies]
+rig-tap = { version = "0.3", features = ["metrics"] }
+```
+
+With the feature on, every emitted event also updates `rig_tap.events.count`
+(labelled with `kind`, `model`, `tool_name`, `error_class`), plus
+`rig_tap.tokens.{in,out,cached_in,reasoning}`, `rig_tap.ttft_ms`,
+`rig_tap.duration_ms`, and `rig_tap.memory.{message_count,byte_size}` where the
+source event carries those fields. Install any `metrics`-compatible recorder
+(e.g. `metrics-exporter-prometheus`) in your application as usual.
 
 ## Coexistence with `rig-core::telemetry`
 
